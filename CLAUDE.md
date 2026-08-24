@@ -58,7 +58,9 @@ Root scripts (`pnpm dev|build|lint|typecheck|test`) all delegate to Turborepo. C
 
 ## Working agreement reminders
 
-- One phase at a time; branch per phase (`phase/NN-name`); PR; CI green; merge.
+- One phase at a time; work directly on `main` — no phase branches, no PRs (user preference, set
+  after Phase 1: solo portfolio repo, review overhead isn't worth it). CI on `main` still gates via
+  `ci.yml`; if a push breaks CI, fix forward with the next commit rather than reverting.
 - Write an ADR for every non-obvious choice and every divergence from the reference architecture.
 - Never write server code that reads/logs a message body — if you catch yourself doing it, stop and
   say which requirement is pushing you there.
@@ -72,12 +74,11 @@ Root scripts (`pnpm dev|build|lint|typecheck|test`) all delegate to Turborepo. C
 `3b7f874`. GitHub repo `dsouzamelroy2007/driftline` (private) created, `gh` authenticated, `origin`
 wired.
 
-**Phase 1 (Monorepo Foundation & DX): complete**, on branch `phase/01-monorepo-foundation`, PR open.
-pnpm+Turborepo workspace scaffolded per `docs/ADR/0001-stack.md`; `apps/server`, `apps/web`,
-`packages/{ui-tokens,tsconfig,eslint-config}` created (see "Repo layout" above); baseline CI
-(`ci.yml`: lint/typecheck/test/build) green. Verified locally: server `/health` + Socket.IO
+**Phase 1 (Monorepo Foundation & DX): complete, merged to `main`** at `a8bcf1c`. pnpm+Turborepo
+workspace scaffolded per `docs/ADR/0001-stack.md`; `apps/server`, `apps/web`,
+`packages/{ui-tokens,tsconfig,eslint-config}` created (see "Repo layout" above); CI
+(`ci.yml`: lint/typecheck/test/build) green on `main`. Verified locally: server `/health` + Socket.IO
 handshake respond, web shell page renders with token-driven light/dark styling. No product logic yet
 — that starts Phase 2.
 
-Next: merge the Phase 1 PR once CI is confirmed green on GitHub, then start Phase 2 (Identity, devices
-& service discovery).
+Next: Phase 2 (Identity, devices & service discovery).
