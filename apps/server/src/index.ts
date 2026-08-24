@@ -16,9 +16,15 @@ import oauthRoutes from "./modules/auth/oauth/oauth.routes.js";
 import devicesRoutes from "./modules/devices/devices.routes.js";
 import discoveryRoutes from "./modules/discovery/discovery.routes.js";
 import { startDiscoveryHeartbeat } from "./modules/discovery/discovery.service.js";
+import conversationsRoutes from "./modules/relay/conversations.routes.js";
+import { sweepDormantDevices } from "./modules/relay/dormancy.js";
+import { registerSocketHandlers } from "./modules/relay/socket.js";
+import { sweepExpiredEnvelopes } from "./modules/relay/sweeper.js";
 import usersRoutes from "./modules/users/users.routes.js";
 import appContext from "./plugins/app-context.js";
 import authPlugin from "./plugins/auth-plugin.js";
+
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 const db = createDbClient(env.DATABASE_URL);
 const redis = createRedisClient(env.REDIS_URL);
@@ -51,6 +57,7 @@ await app.register(oauthRoutes);
 await app.register(usersRoutes);
 await app.register(devicesRoutes);
 await app.register(discoveryRoutes);
+await app.register(conversationsRoutes);
 
 await app.listen({ port: env.PORT, host: "0.0.0.0" });
 
@@ -58,8 +65,27 @@ const io = new SocketIOServer(app.server, {
   cors: { origin: env.WEB_ORIGIN },
 });
 
-io.on("connection", (socket) => {
-  socket.on("ping", () => socket.emit("pong"));
-});
+registerSocketHandlers(io, { db, env });
 
 startDiscoveryHeartbeat(redis, randomUUID(), env.DISCOVERY_HOST);
+
+// In-process interval sweeps, not a separate infra/scripts job — zero extra cost on a $0-budget
+// deployment. Revisit only if this ever needs to move out-of-process (Phase 8/9).
+let sweepRunning = false;
+setInterval(() => {
+  if (sweepRunning) return;
+  sweepRunning = true;
+  void Promise.all([sweepExpiredEnvelopes(db), sweepDormantDevices(db, env.DEVICE_DORMANCY_DAYS)])
+    .then(([envelopeResult, dormantCount]) => {
+      if (envelopeResult.purgedCount > 0 || dormantCount > 0) {
+        app.log.info(
+          { purgedEnvelopes: envelopeResult.purgedCount, durationMs: envelopeResult.durationMs, dormantCount },
+          "retention sweep",
+        );
+      }
+    })
+    .catch((error: unknown) => app.log.error(error, "retention sweep failed"))
+    .finally(() => {
+      sweepRunning = false;
+    });
+}, SWEEP_INTERVAL_MS);

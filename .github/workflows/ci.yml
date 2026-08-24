@@ -9,6 +9,24 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: driftline
+          POSTGRES_PASSWORD: driftline
+          POSTGRES_DB: driftline_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U driftline -d driftline_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Relay integration tests (apps/server/src/modules/relay/retention.integration.test.ts) — the
+      # Phase 3 exit gate — run against this real Postgres, not a mock (docs/RETENTION.md).
+      DATABASE_URL: postgres://driftline:driftline@localhost:5432/driftline_test
     steps:
       - uses: actions/checkout@v4
 
@@ -20,5 +38,7 @@ jobs:
           cache: "pnpm"
 
       - run: pnpm install --frozen-lockfile
+
+      - run: pnpm --filter @driftline/db db:migrate
 
       - run: pnpm turbo run lint typecheck test build

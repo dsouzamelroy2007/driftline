@@ -32,6 +32,10 @@ be re-derived from `docs/RETENTION.md`, which is its formal contract).
 - Auth is device-scoped bearer tokens (JWT access + rotating opaque refresh token), not cookie
   sessions — chosen so web and the future Expo client share one auth path.
   [ADR-0004](docs/ADR/0004-auth-token-model.md).
+- `packages/db` uses `drizzle-orm/node-postgres` (a `pg` Pool against the Neon connection string),
+  not Neon's HTTP serverless driver — `apps/server` is a long-running Render process with no
+  edge/serverless constraint, and the ack-triggered purge needs real transactions + row locking that
+  `neon-http` cannot provide. [ADR-0005](docs/ADR/0005-postgres-driver.md).
 
 ## Where things live
 
@@ -39,45 +43,63 @@ be re-derived from `docs/RETENTION.md`, which is its formal contract).
 design/reference-system-design.md   — the source system-design study (read-only reference)
 docs/DESIGN_REVIEW.md               — what transfers/breaks/is-overkill from the reference doc
 docs/RETENTION.md                   — the retention model contract (read before touching purge logic)
+docs/REALTIME_PROTOCOL.md           — Socket.IO contract: handshake auth, every event, gap-notice signaling
 docs/UI_DIRECTION.md                — IA, screens, nav, tokens, motion, retention-specific UX
 docs/ROADMAP.md                     — phase sequence, MVP cut, open questions
 docs/ADR/                           — 0001 stack, 0002 retention/storage, 0003 multi-device sync,
-                                       0004 auth token model
+                                       0004 auth token model, 0005 Postgres driver
 ```
 (`apps/`, `packages/` now exist as of Phase 1 — see below. `infra/` and the remaining `docs/*.md`
-listed in the master plan's repo layout — `ARCHITECTURE.md`, `REALTIME_PROTOCOL.md`, `SYNC_MODEL.md`,
-`SCALE.md`, `SECURITY.md`, `RUNBOOK.md`, `CASE_STUDY.md`, `BACKUP_FORMAT.md` — land in later phases.)
+listed in the master plan's repo layout — `ARCHITECTURE.md`, `SYNC_MODEL.md`, `SCALE.md`,
+`SECURITY.md`, `RUNBOOK.md`, `CASE_STUDY.md`, `BACKUP_FORMAT.md` — land in later phases.)
 
-## Repo layout (as of Phase 2)
+## Repo layout (as of Phase 3)
 
 ```
-apps/server/           Fastify + Socket.IO. Real auth/device/discovery API now (see below);
-                        Socket.IO itself is still just the Phase 1 ping/pong — handshake auth,
-                        rooms, and message relay are Phase 3.
+apps/server/           Fastify + Socket.IO. Auth/device/discovery/conversations REST API, plus the
+                        Socket.IO relay: handshake auth, per-device rooms, message send/deliver/ack,
+                        ack-triggered purge, expiry sweeper + dormancy sweep (in-process intervals).
 apps/web/               Next.js App Router — single shell page, no real UI yet (Phase 5)
-packages/db/            Drizzle schema (users, devices, oauth_accounts) + Neon client + migrations
+packages/db/            Drizzle schema (users, devices, oauth_accounts, conversations,
+                        conversation_members, conversation_sequences, envelopes, envelope_targets)
+                        + node-postgres client (ADR-0005) + migrations
 packages/ui-tokens/     Design tokens (docs/UI_DIRECTION.md §5) + Tailwind preset
 packages/tsconfig/      Shared strict base tsconfig
 packages/eslint-config/ Shared flat ESLint config + Prettier config
 ```
 Root scripts (`pnpm dev|build|lint|typecheck|test`) all delegate to Turborepo. CI
-(`.github/workflows/ci.yml`) runs the same four tasks on every push to `main`.
+(`.github/workflows/ci.yml`) runs the same four tasks on every push to `main`, against a
+`postgres:16` service container (relay integration tests need a real Postgres — see
+`docker-compose.yml` for the equivalent local setup, `README.md` for the exact commands).
 
 `apps/server` env vars: see `.env.example` at repo root — copy to `.env` (gitignored) with real
 Neon (`DATABASE_URL`), Upstash (`REDIS_URL`, must be the `rediss://` protocol string, not the REST
-URL), Resend (`RESEND_API_KEY`), a GitHub OAuth App (`GITHUB_CLIENT_ID`/`SECRET`), plus a generated
-`JWT_SECRET`. Run `pnpm --filter @driftline/db db:migrate` once after schema changes.
+URL), Resend (`RESEND_API_KEY`), a GitHub OAuth App (`GITHUB_CLIENT_ID`/`SECRET`), a generated
+`JWT_SECRET`, plus `RETENTION_WINDOW_DAYS`/`DEVICE_DORMANCY_DAYS` (both default 30). Run
+`pnpm --filter @driftline/db db:migrate` once after schema changes.
 
 Auth API (all under `apps/server`, see ADR-0004 for the token model):
 `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /me`,
-`GET /devices`, `DELETE /devices/:id` (revoke), `GET /discovery` (service-discovery contract, Redis
-heartbeat registry), `POST /auth/magic-link/request`, `POST /auth/magic-link/verify` (Redis-backed,
+`GET /devices`, `DELETE /devices/:id` (revoke — now also synchronously purges the device's pending
+envelope targets, see below), `GET /discovery` (service-discovery contract, Redis heartbeat
+registry), `POST /auth/magic-link/request`, `POST /auth/magic-link/verify` (Redis-backed,
 single-use via `GETDEL`), `GET /auth/oauth/github/start`, `GET /auth/oauth/github/callback`
 (redirects to `${WEB_ORIGIN}/auth/callback#accessToken=...&refreshToken=...` — that page doesn't
 exist yet, Phase 5). Rate-limited (`/auth/register`, `/auth/login`, `/auth/magic-link/request`,
 20/min, Redis-backed). Not built: Google OAuth (same pattern as GitHub's `oauth/github.service.ts`,
-deferred), Socket.IO handshake auth, `Conversation`/`Envelope`/etc. schema (Phase 3), device
-dormancy *sweeping* (field exists, the scheduled job is Phase 3).
+deferred).
+
+Relay (Phase 3, `apps/server/src/modules/relay/`, full contract in `docs/REALTIME_PROTOCOL.md`):
+`POST /conversations`, `GET /conversations` (direct + group, ≤100 members). Socket.IO: handshake
+auth via the same access-token verification path as HTTP; `message:send` (ack-callback with
+`{envelopeId, seq}`), `envelope:deliver` (server → client), `envelope:ack` (client → server, the
+hot path that triggers the transactional purge), `dormancy:return` (gap-notice signal on
+reconnect). Purge paths: ack-triggered (same transaction, `SELECT ... FOR UPDATE` serializes
+concurrent acks on one envelope — see `modules/relay/purge.ts`), expiry sweeper, and device
+revocation, all logging `envelope_purged_total{reason}` with envelope ID + size only. Expiry
+sweeper and dormancy sweep run as in-process `setInterval`s (every 5 min), not a separate
+`infra/scripts/sweeper` — revisit only if this needs to move out-of-process (Phase 8/9). Not built:
+client-side gap-notice rendering (Phase 4), attachments/R2 (MVP+).
 
 ## Working agreement reminders
 
@@ -111,6 +133,28 @@ masking `@fastify/rate-limit`'s 429s as 500s (fixed by respecting any thrown err
 unit tests) green. Google OAuth deliberately not built — same pattern as GitHub's, left as a small
 follow-up whenever it's wanted.
 
-Next: Phase 3 (Relay core: store-and-forward, fan-out & retention) — the actual chat functionality,
-and the phase whose exit gate (an automated test proving zero message bodies survive after all
-parties ack) everything client-facing depends on.
+**Phase 3 (Relay core: store-and-forward, fan-out & retention): complete on `main`.**
+`Conversation`/`ConversationMember`/`ConversationSequence`/`Envelope`/`EnvelopeTarget` schema, the
+Socket.IO relay (handshake auth, per-device rooms, `message:send`/`envelope:deliver`/`envelope:ack`,
+reconnect drain), and every purge path from `docs/RETENTION.md` §7's checklist: ack-triggered
+(transactional, `FOR UPDATE`-locked to be race-safe under concurrent acks), expiry sweeper, dormancy
+sweep, and revocation. Exit gate met: `apps/server/src/modules/relay/retention.integration.test.ts`
+proves zero message bodies survive after all parties ack (plus partial-ack, concurrent-ack, expiry,
+and revocation cases) against a real Postgres — verified twice, once via the integration test suite
+and once by hand over live Socket.IO connections with a direct DB check afterward. Required a
+foundational fix first: `packages/db` was on Neon's HTTP driver, which cannot do transactions at
+all — switched to `drizzle-orm/node-postgres` ([ADR-0005](docs/ADR/0005-postgres-driver.md)). CI now
+runs relay integration tests against a `postgres:16` service container; `docker-compose.yml` gives
+the same locally. Full pipeline (lint/typecheck/test/build, 17 tests) green — see
+`docs/RETENTION.md` §7's "Verification" note for the itemized proof against the retention contract.
+Bugs found and fixed while running the full pipeline against the new tests (not present in the
+relay logic itself, but would have broken CI): Turborepo's strict env mode was silently stripping
+`DATABASE_URL` before it reached the test task (fixed via `turbo.json`'s task-level `env`
+declaration — this is the first test suite in the repo to read `process.env` directly, so nothing
+had exposed the gap before), and the existing bcrypt password test was timing out at the default
+5s under the CPU contention of the now-larger full pipeline (fixed by raising
+`vitest.config.ts`'s `testTimeout`, unrelated to bcrypt's cost factor itself).
+
+Next: Phase 4 (Client sync engine & local-first store) — `packages/local-store`/`packages/sync-engine`
+consuming `docs/REALTIME_PROTOCOL.md`, including client-side gap-notice rendering
+(`docs/RETENTION.md` §6) from the sequence numbers and `dormancy:return` signal the relay now emits.

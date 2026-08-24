@@ -124,18 +124,50 @@ it purged something; the client infers the gap from what it can no longer fetch.
 
 ## 7. Purge triggers — implementation checklist
 
-- [ ] **Ack-triggered purge**: `EnvelopeTarget` update to `delivered` → check if it was the last
+- [x] **Ack-triggered purge**: `EnvelopeTarget` update to `delivered` → check if it was the last
       pending target for its envelope → if so, delete payload + all targets + the envelope row, one
-      transaction.
-- [ ] **Sweeper**: scheduled job (`infra/scripts/sweeper`) querying `expiresAt < now()`, deleting in
-      batches, emitting `envelope_purged_total{reason="expiry"}` and `sweeper_run_duration_seconds`.
-- [ ] **Dormancy sweep**: separate scheduled check marking devices `dormantAt` past the threshold and
-      excluding them from future fan-out queries (no deletion of the device record itself).
-- [ ] **Revocation**: synchronous, user-triggered — deletes pending targets for that device
-      immediately, does not wait for the sweeper.
+      transaction. Built in `apps/server/src/modules/relay/purge.ts` +
+      `envelopes.service.ts`'s `ackEnvelope`, `SELECT ... FOR UPDATE`-locked so two devices acking
+      the last two pending targets of one envelope concurrently can't both miss the purge.
+- [x] **Sweeper**: queries `expiresAt < now()`, deletes in batches, emits
+      `envelope_purged_total{reason="expiry"}`. Built as an in-process `setInterval`
+      (`apps/server/src/modules/relay/sweeper.ts`, wired in `src/index.ts`) rather than the
+      standalone `infra/scripts/sweeper` originally sketched here — zero extra cost on a $0-budget
+      deployment; revisit only if this needs to move out-of-process (Phase 8/9).
+- [x] **Dormancy sweep**: separate scheduled check marking devices `dormantAt` past the threshold and
+      excluding them from future fan-out queries (no deletion of the device record itself). Built in
+      `apps/server/src/modules/relay/dormancy.ts`, same in-process interval as the sweeper.
+- [x] **Revocation**: synchronous, user-triggered — deletes pending targets for that device
+      immediately, does not wait for the sweeper. Built in `devices.service.ts`'s `revokeDevice`,
+      reusing the same lock-count-and-maybe-delete helper as the ack path for any envelope that
+      loses its last pending target this way.
 - [ ] **Monitoring** (formalized in Phase 8, flagged here because it's a retention invariant): alert
       if the oldest *pending* envelope's age exceeds `RETENTION_WINDOW_DAYS` — that means the sweeper
       itself is broken and data is being retained silently past the contract.
+
+### Verification (Phase 3, 2026-08-25)
+
+The four checked-off paths above are proven, not just implemented, by
+`apps/server/src/modules/relay/retention.integration.test.ts` running against a real Postgres (not
+a mock — transaction/row-locking semantics can't be trusted to one; see `docker-compose.yml` and
+`.github/workflows/ci.yml`, which runs this suite on every push):
+
+- Single recipient acks → envelope + its one target row are gone (the literal "zero message bodies
+  survive after all parties ack" exit gate from `docs/ROADMAP.md`).
+- Group conversation, partial ack → envelope still exists after the first ack, only purges after
+  the last one — proves the purge is neither premature nor delayed.
+- Two devices ack the last two pending targets of one envelope **concurrently**
+  (`Promise.all`) → exactly one purge happens, never zero, never two — this is the test that
+  actually exercises the `FOR UPDATE` lock's reason for existing, not just the happy path.
+- An envelope forced past `expiresAt` is purged by the sweeper regardless of pending target state.
+- Revoking a device that held an envelope's last pending target purges that envelope too.
+
+Additionally verified by hand, once, over live Socket.IO connections (register two real users →
+create a conversation → connect both sockets → `message:send` → `envelope:deliver` →
+`envelope:ack`), with the resulting envelope ID queried directly in Postgres afterward to confirm
+zero rows in both `envelopes` and `envelope_targets` — the integration tests exercise the service
+functions directly, this pass confirms the same guarantee holds through the actual wire protocol
+(`docs/REALTIME_PROTOCOL.md`).
 
 ## 8. Open question carried to Phase 2/8
 

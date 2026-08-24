@@ -15,6 +15,8 @@ const envSchema = z.object({
   RESEND_FROM_EMAIL: z.string().min(1).default("Driftline <onboarding@resend.dev>"),
   GITHUB_CLIENT_ID: z.string().min(1, "GITHUB_CLIENT_ID is required"),
   GITHUB_CLIENT_SECRET: z.string().min(1, "GITHUB_CLIENT_SECRET is required"),
+  RETENTION_WINDOW_DAYS: z.coerce.number().int().positive().default(30),
+  DEVICE_DORMANCY_DAYS: z.coerce.number().int().positive().default(30),
 });
 
 export const env = envSchema.parse(process.env);

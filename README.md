@@ -16,6 +16,8 @@ phase are tracked in [`CLAUDE.md`](CLAUDE.md).
   reference chat-system architecture, and why.
 - [`docs/RETENTION.md`](docs/RETENTION.md) — the formal retention model: what's stored, for how
   long, and the exact purge rules.
+- [`docs/REALTIME_PROTOCOL.md`](docs/REALTIME_PROTOCOL.md) — the Socket.IO contract: handshake
+  auth, every event, and what a client must not assume about history/replay.
 - [`docs/UI_DIRECTION.md`](docs/UI_DIRECTION.md) — information architecture, screens, and the UX
   problems this architecture creates that a normal chat app doesn't have.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — phase sequence and MVP scope.
@@ -43,6 +45,21 @@ pnpm typecheck     # typecheck everything
 pnpm test          # test everything
 ```
 
+To run the relay's integration tests (`apps/server/src/modules/relay/retention.integration.test.ts`
+— the Phase 3 exit gate proving zero message bodies survive after all parties ack) against a local
+Postgres instead of your real Neon dev DB:
+
+```sh
+docker compose up -d   # postgres:16 on localhost:5433, db driftline_test
+DATABASE_URL=postgres://driftline:driftline@localhost:5433/driftline_test \
+  pnpm --filter @driftline/db db:migrate
+DATABASE_URL=postgres://driftline:driftline@localhost:5433/driftline_test \
+  pnpm --filter @driftline/server test
+```
+
+CI does the same against a GitHub Actions Postgres service container — see `.github/workflows/ci.yml`.
+
 `apps/server` listens on `:4000` — `/health`, an auth API (password, magic-link, GitHub OAuth),
-device registry, `/discovery`, and a Socket.IO transport that's still just Phase 1's ping/pong
-(message relay is Phase 3). `apps/web` runs the Next.js dev server on `:3000`.
+device registry, `/discovery`, conversations, and the Socket.IO relay (handshake auth, message
+send/deliver/ack — see [`docs/REALTIME_PROTOCOL.md`](docs/REALTIME_PROTOCOL.md)). `apps/web` runs
+the Next.js dev server on `:3000`.
