@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Values mirror packages/ui-tokens/src/tokens.ts (docs/UI_DIRECTION.md §5).
+ * Keep the two in sync until a later phase generates this file from tokens.
+ */
+:root {
+  --color-bg-base: #fafaf9;
+  --color-bg-surface: #ffffff;
+  --color-bg-surface-raised: #f1f1ef;
+  --color-accent-primary: #2e5f73;
+  --color-accent-retention: #b8763e;
+  --color-text-primary: #1b1e22;
+  --color-text-muted: #6b7078;
+  --color-status-online: #3e9469;
+  --color-status-error: #c4483a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg-base: #0f1216;
+    --color-bg-surface: #171b21;
+    --color-bg-surface-raised: #20252c;
+    --color-accent-primary: #5fa3bd;
+    --color-accent-retention: #d9925a;
+    --color-text-primary: #edeff2;
+    --color-text-muted: #8b919b;
+    --color-status-online: #4fbf83;
+    --color-status-error: #e0685a;
+  }
+}
+
+body {
+  background-color: var(--color-bg-base);
+  color: var(--color-text-primary);
+}
