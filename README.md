@@ -33,6 +33,8 @@ Requires Node (see `.nvmrc`) and pnpm (via corepack — `corepack enable`).
 
 ```sh
 pnpm install
+cp .env.example .env   # fill in DATABASE_URL (Neon), REDIS_URL (Upstash, rediss:// form), JWT_SECRET
+pnpm --filter @driftline/db db:migrate   # apply the Postgres schema
 pnpm dev          # runs apps/server and apps/web in parallel
 pnpm build        # build everything
 pnpm lint          # lint everything
@@ -40,5 +42,6 @@ pnpm typecheck     # typecheck everything
 pnpm test          # test everything
 ```
 
-`apps/server` listens on `:4000` (`/health`, plus a Socket.IO transport with no real logic yet).
-`apps/web` runs the Next.js dev server on `:3000`.
+`apps/server` listens on `:4000` — `/health`, an auth/device/service-discovery API (register, login,
+refresh, logout, `/me`, `/devices`, `/discovery`), and a Socket.IO transport that's still just Phase
+1's ping/pong (message relay is Phase 3). `apps/web` runs the Next.js dev server on `:3000`.

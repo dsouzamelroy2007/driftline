@@ -9,18 +9,29 @@
     "start": "node dist/index.js",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "echo \"no tests yet\" && exit 0"
+    "test": "vitest run"
   },
   "dependencies": {
+    "@driftline/db": "workspace:*",
+    "@fastify/cors": "^10.0.2",
+    "@fastify/rate-limit": "^10.2.2",
+    "bcryptjs": "^2.4.3",
+    "drizzle-orm": "^0.38.3",
     "fastify": "^5.2.1",
-    "socket.io": "^4.8.1"
+    "fastify-plugin": "^5.0.1",
+    "ioredis": "^5.4.2",
+    "jose": "^5.9.6",
+    "socket.io": "^4.8.1",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@driftline/eslint-config": "workspace:*",
     "@driftline/tsconfig": "workspace:*",
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.10.7",
     "eslint": "^9.19.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.4"
   }
 }
