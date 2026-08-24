@@ -6,23 +6,23 @@ import { hashPassword, verifyPassword } from "../../lib/password.js";
 import { generateRefreshToken, hashRefreshToken, signAccessToken } from "../../lib/tokens.js";
 import type { DeviceInfo, LoginInput, RegisterInput } from "./auth.schemas.js";
 
-interface AuthEnv {
+export interface AuthEnv {
   JWT_SECRET: string;
   JWT_ACCESS_TTL_SECONDS: number;
   JWT_REFRESH_TTL_DAYS: number;
 }
 
-interface TokenPair {
+export interface TokenPair {
   accessToken: string;
   refreshToken: string;
 }
 
-interface AuthResult extends TokenPair {
+export interface AuthResult extends TokenPair {
   user: User;
   device: Device;
 }
 
-async function upsertDevice(db: Db, userId: string, info: DeviceInfo): Promise<Device> {
+export async function upsertDevice(db: Db, userId: string, info: DeviceInfo): Promise<Device> {
   if (info.deviceId) {
     const [existing] = await db
       .select()
@@ -55,7 +55,7 @@ async function upsertDevice(db: Db, userId: string, info: DeviceInfo): Promise<D
   return created!;
 }
 
-async function issueTokenPair(
+export async function issueTokenPair(
   db: Db,
   userId: string,
   deviceId: string,
@@ -93,7 +93,10 @@ export async function registerUser(db: Db, input: RegisterInput, env: AuthEnv): 
 
 export async function loginUser(db: Db, input: LoginInput, env: AuthEnv): Promise<AuthResult> {
   const [user] = await db.select().from(users).where(eq(users.email, input.email)).limit(1);
-  if (!user || !(await verifyPassword(input.password, user.passwordHash))) {
+  // No passwordHash means an OAuth-/magic-link-only account — treat the same as
+  // a wrong password rather than a distinct error, so the response never
+  // reveals which auth method an account uses.
+  if (!user || !user.passwordHash || !(await verifyPassword(input.password, user.passwordHash))) {
     throw new HttpError(401, "Invalid email or password");
   }
 

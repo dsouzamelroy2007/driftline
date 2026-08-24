@@ -48,14 +48,14 @@ docs/ADR/                           — 0001 stack, 0002 retention/storage, 0003
 listed in the master plan's repo layout — `ARCHITECTURE.md`, `REALTIME_PROTOCOL.md`, `SYNC_MODEL.md`,
 `SCALE.md`, `SECURITY.md`, `RUNBOOK.md`, `CASE_STUDY.md`, `BACKUP_FORMAT.md` — land in later phases.)
 
-## Repo layout (as of Phase 2 core)
+## Repo layout (as of Phase 2)
 
 ```
 apps/server/           Fastify + Socket.IO. Real auth/device/discovery API now (see below);
                         Socket.IO itself is still just the Phase 1 ping/pong — handshake auth,
                         rooms, and message relay are Phase 3.
 apps/web/               Next.js App Router — single shell page, no real UI yet (Phase 5)
-packages/db/            Drizzle schema (users, devices) + Neon client + migrations
+packages/db/            Drizzle schema (users, devices, oauth_accounts) + Neon client + migrations
 packages/ui-tokens/     Design tokens (docs/UI_DIRECTION.md §5) + Tailwind preset
 packages/tsconfig/      Shared strict base tsconfig
 packages/eslint-config/ Shared flat ESLint config + Prettier config
@@ -64,17 +64,20 @@ Root scripts (`pnpm dev|build|lint|typecheck|test`) all delegate to Turborepo. C
 (`.github/workflows/ci.yml`) runs the same four tasks on every push to `main`.
 
 `apps/server` env vars: see `.env.example` at repo root — copy to `.env` (gitignored) with real
-Neon (`DATABASE_URL`) and Upstash (`REDIS_URL`, must be the `rediss://` protocol string, not the
-REST URL) values, plus a generated `JWT_SECRET`. Run `pnpm --filter @driftline/db db:migrate` once
-after schema changes.
+Neon (`DATABASE_URL`), Upstash (`REDIS_URL`, must be the `rediss://` protocol string, not the REST
+URL), Resend (`RESEND_API_KEY`), a GitHub OAuth App (`GITHUB_CLIENT_ID`/`SECRET`), plus a generated
+`JWT_SECRET`. Run `pnpm --filter @driftline/db db:migrate` once after schema changes.
 
 Auth API (all under `apps/server`, see ADR-0004 for the token model):
 `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /me`,
 `GET /devices`, `DELETE /devices/:id` (revoke), `GET /discovery` (service-discovery contract, Redis
-heartbeat registry). Rate-limited (`/auth/register`, `/auth/login`, 20/min, Redis-backed).
-Not built yet: magic-link login, OAuth (Google/GitHub) — deferred follow-on to Phase 2, needs Resend
-+ OAuth app credentials. Also not built: Socket.IO handshake auth, `Conversation`/`Envelope`/etc.
-schema (Phase 3), device dormancy *sweeping* (field exists, the scheduled job is Phase 3).
+heartbeat registry), `POST /auth/magic-link/request`, `POST /auth/magic-link/verify` (Redis-backed,
+single-use via `GETDEL`), `GET /auth/oauth/github/start`, `GET /auth/oauth/github/callback`
+(redirects to `${WEB_ORIGIN}/auth/callback#accessToken=...&refreshToken=...` — that page doesn't
+exist yet, Phase 5). Rate-limited (`/auth/register`, `/auth/login`, `/auth/magic-link/request`,
+20/min, Redis-backed). Not built: Google OAuth (same pattern as GitHub's `oauth/github.service.ts`,
+deferred), Socket.IO handshake auth, `Conversation`/`Envelope`/etc. schema (Phase 3), device
+dormancy *sweeping* (field exists, the scheduled job is Phase 3).
 
 ## Working agreement reminders
 
@@ -97,18 +100,17 @@ wired.
 **Phase 1 (Monorepo Foundation & DX): complete, merged to `main`** at `a8bcf1c`. pnpm+Turborepo
 workspace scaffolded per `docs/ADR/0001-stack.md`.
 
-**Phase 2 core (Identity, devices & service discovery): complete on `main`.** `packages/db`
-(Neon+Drizzle schema for `users`/`devices`) and the auth/device/discovery API in `apps/server` are
-built and verified end-to-end against real Neon + Upstash (register → login with device reuse →
-`/me` → `/devices` → refresh rotation with old-token rejection → device revocation with immediate
-access-token rejection → `/discovery` → rate-limit 429). Two real bugs found and fixed during
-verification: auth responses were leaking `passwordHash`/`refreshTokenHash` (fixed via
-`lib/serialize.ts`), and the global error handler was masking `@fastify/rate-limit`'s 429s as 500s
-(fixed by respecting any thrown error's own `statusCode`, not just the app's `HttpError` class). Full
-pipeline (lint/typecheck/test/build, 8 new unit tests) green.
+**Phase 2 (Identity, devices & service discovery): complete on `main`.** `packages/db`
+(Neon+Drizzle schema for `users`/`devices`/`oauth_accounts`) and the full auth surface in
+`apps/server` — password, magic-link (Resend), and GitHub OAuth — plus device registry and
+service discovery, all verified end-to-end against real Neon, Upstash, Resend, and a live GitHub
+OAuth consent flow. Bugs found and fixed during verification: auth responses were leaking
+`passwordHash`/`refreshTokenHash` (fixed via `lib/serialize.ts`), and the global error handler was
+masking `@fastify/rate-limit`'s 429s as 500s (fixed by respecting any thrown error's own
+`statusCode`, not just the app's `HttpError` class). Full pipeline (lint/typecheck/test/build, 12
+unit tests) green. Google OAuth deliberately not built — same pattern as GitHub's, left as a small
+follow-up whenever it's wanted.
 
-Follow-on to Phase 2 (deferred, not started): magic-link login (needs Resend) and OAuth/Google+GitHub
-(needs those app credentials) — see "Repo layout" above.
-
-Next: either the Phase 2 follow-on (magic-link/OAuth) or moving straight to Phase 3 (Relay core:
-store-and-forward, fan-out & retention) — ask the user which.
+Next: Phase 3 (Relay core: store-and-forward, fan-out & retention) — the actual chat functionality,
+and the phase whose exit gate (an automated test proving zero message bodies survive after all
+parties ack) everything client-facing depends on.

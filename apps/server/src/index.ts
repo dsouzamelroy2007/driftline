@@ -7,9 +7,12 @@ import Fastify, { type FastifyError } from "fastify";
 import { Server as SocketIOServer } from "socket.io";
 
 import { env } from "./env.js";
+import { createEmailClient } from "./lib/email.js";
 import { HttpError } from "./lib/errors.js";
 import { createRedisClient } from "./lib/redis.js";
 import authRoutes from "./modules/auth/auth.routes.js";
+import magicLinkRoutes from "./modules/auth/magic-link.routes.js";
+import oauthRoutes from "./modules/auth/oauth/oauth.routes.js";
 import devicesRoutes from "./modules/devices/devices.routes.js";
 import discoveryRoutes from "./modules/discovery/discovery.routes.js";
 import { startDiscoveryHeartbeat } from "./modules/discovery/discovery.service.js";
@@ -19,6 +22,7 @@ import authPlugin from "./plugins/auth-plugin.js";
 
 const db = createDbClient(env.DATABASE_URL);
 const redis = createRedisClient(env.REDIS_URL);
+const email = createEmailClient(env.RESEND_API_KEY);
 
 const app = Fastify({ logger: true });
 
@@ -35,13 +39,15 @@ app.setErrorHandler((error: FastifyError, request, reply) => {
   reply.code(statusCode).send({ error: error.message });
 });
 
-await app.register(appContext, { db, redis, env });
+await app.register(appContext, { db, redis, email, env });
 await app.register(cors, { origin: env.WEB_ORIGIN });
 await app.register(rateLimit, { global: false, redis });
 await app.register(authPlugin);
 
 app.get("/health", async () => ({ status: "ok" }));
 await app.register(authRoutes);
+await app.register(magicLinkRoutes);
+await app.register(oauthRoutes);
 await app.register(usersRoutes);
 await app.register(devicesRoutes);
 await app.register(discoveryRoutes);

@@ -10,6 +10,11 @@ const envSchema = z.object({
   JWT_REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
   WEB_ORIGIN: z.string().min(1).default("http://localhost:3000"),
   DISCOVERY_HOST: z.string().min(1).default("http://localhost:4000"),
+  SERVER_PUBLIC_URL: z.string().min(1).default("http://localhost:4000"),
+  RESEND_API_KEY: z.string().min(1, "RESEND_API_KEY is required"),
+  RESEND_FROM_EMAIL: z.string().min(1).default("Driftline <onboarding@resend.dev>"),
+  GITHUB_CLIENT_ID: z.string().min(1, "GITHUB_CLIENT_ID is required"),
+  GITHUB_CLIENT_SECRET: z.string().min(1, "GITHUB_CLIENT_SECRET is required"),
 });
 
 export const env = envSchema.parse(process.env);
