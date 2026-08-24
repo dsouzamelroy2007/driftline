@@ -26,3 +26,19 @@ phase are tracked in [`CLAUDE.md`](CLAUDE.md).
 
 A full setup guide, architecture diagram, and case study land as the corresponding phases complete
 (see the roadmap).
+
+## Getting started
+
+Requires Node (see `.nvmrc`) and pnpm (via corepack — `corepack enable`).
+
+```sh
+pnpm install
+pnpm dev          # runs apps/server and apps/web in parallel
+pnpm build        # build everything
+pnpm lint          # lint everything
+pnpm typecheck     # typecheck everything
+pnpm test          # test everything
+```
+
+`apps/server` listens on `:4000` (`/health`, plus a Socket.IO transport with no real logic yet).
+`apps/web` runs the Next.js dev server on `:3000`.

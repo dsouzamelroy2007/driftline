@@ -40,9 +40,21 @@ docs/UI_DIRECTION.md                — IA, screens, nav, tokens, motion, retent
 docs/ROADMAP.md                     — phase sequence, MVP cut, open questions
 docs/ADR/                           — 0001 stack, 0002 retention/storage, 0003 multi-device sync
 ```
-(Phases 1+ will populate `apps/`, `packages/`, `infra/`, and the remaining `docs/*.md` listed in the
-master plan's repo layout — `ARCHITECTURE.md`, `REALTIME_PROTOCOL.md`, `SYNC_MODEL.md`, `SCALE.md`,
-`SECURITY.md`, `RUNBOOK.md`, `CASE_STUDY.md`, `BACKUP_FORMAT.md`.)
+(`apps/`, `packages/` now exist as of Phase 1 — see below. `infra/` and the remaining `docs/*.md`
+listed in the master plan's repo layout — `ARCHITECTURE.md`, `REALTIME_PROTOCOL.md`, `SYNC_MODEL.md`,
+`SCALE.md`, `SECURITY.md`, `RUNBOOK.md`, `CASE_STUDY.md`, `BACKUP_FORMAT.md` — land in later phases.)
+
+## Repo layout (as of Phase 1)
+
+```
+apps/server/          Fastify + Socket.IO — /health route + ping/pong socket event only, no auth/logic yet
+apps/web/              Next.js App Router — single shell page, no real UI yet
+packages/ui-tokens/    Design tokens (docs/UI_DIRECTION.md §5) + Tailwind preset
+packages/tsconfig/     Shared strict base tsconfig
+packages/eslint-config/ Shared flat ESLint config + Prettier config
+```
+Root scripts (`pnpm dev|build|lint|typecheck|test`) all delegate to Turborepo. CI
+(`.github/workflows/ci.yml`) runs the same four tasks on every push/PR to `main`.
 
 ## Working agreement reminders
 
@@ -56,7 +68,16 @@ master plan's repo layout — `ARCHITECTURE.md`, `REALTIME_PROTOCOL.md`, `SYNC_M
 
 ## Status
 
-**Phase 0 (Discovery, Design & Retention Model): deliverables drafted, awaiting user approval.**
-Local repo initialized at `~/Projects/driftline`, not yet pushed — GitHub repo creation + `gh auth
-login` in progress on the user's side. Next: get exit-gate approval on Phase 0 docs, then wire the
-`origin` remote, push, and move to Phase 1.
+**Phase 0 (Discovery, Design & Retention Model): complete and reviewed.** Pushed to `main` at
+`3b7f874`. GitHub repo `dsouzamelroy2007/driftline` (private) created, `gh` authenticated, `origin`
+wired.
+
+**Phase 1 (Monorepo Foundation & DX): complete**, on branch `phase/01-monorepo-foundation`, PR open.
+pnpm+Turborepo workspace scaffolded per `docs/ADR/0001-stack.md`; `apps/server`, `apps/web`,
+`packages/{ui-tokens,tsconfig,eslint-config}` created (see "Repo layout" above); baseline CI
+(`ci.yml`: lint/typecheck/test/build) green. Verified locally: server `/health` + Socket.IO
+handshake respond, web shell page renders with token-driven light/dark styling. No product logic yet
+— that starts Phase 2.
+
+Next: merge the Phase 1 PR once CI is confirmed green on GitHub, then start Phase 2 (Identity, devices
+& service discovery).

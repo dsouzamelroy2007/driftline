@@ -10,6 +10,7 @@ out/
 .turbo/
 .expo/
 .expo-shared/
+*.tsbuildinfo
 
 # Env
 .env
