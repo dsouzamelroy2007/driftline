@@ -36,6 +36,11 @@ be re-derived from `docs/RETENTION.md`, which is its formal contract).
   not Neon's HTTP serverless driver — `apps/server` is a long-running Render process with no
   edge/serverless constraint, and the ack-triggered purge needs real transactions + row locking that
   `neon-http` cannot provide. [ADR-0005](docs/ADR/0005-postgres-driver.md).
+- Web client-side storage is **SQLite Wasm, OPFS-backed** (via `sqlocal`), not Dexie/IndexedDB — so
+  `packages/local-store` shares one Drizzle SQL schema/query layer with the future mobile package
+  (Phase 10, `expo-sqlite`+Drizzle+FTS5). Both the browser and Node (test) backends go through
+  `drizzle-orm/sqlite-proxy`, not a dedicated per-backend driver.
+  [ADR-0006](docs/ADR/0006-local-store-engine.md).
 
 ## Where things live
 
@@ -47,22 +52,35 @@ docs/REALTIME_PROTOCOL.md           — Socket.IO contract: handshake auth, ever
 docs/UI_DIRECTION.md                — IA, screens, nav, tokens, motion, retention-specific UX
 docs/ROADMAP.md                     — phase sequence, MVP cut, open questions
 docs/ADR/                           — 0001 stack, 0002 retention/storage, 0003 multi-device sync,
-                                       0004 auth token model, 0005 Postgres driver
+                                       0004 auth token model, 0005 Postgres driver,
+                                       0006 local-store engine
 ```
 (`apps/`, `packages/` now exist as of Phase 1 — see below. `infra/` and the remaining `docs/*.md`
 listed in the master plan's repo layout — `ARCHITECTURE.md`, `SYNC_MODEL.md`, `SCALE.md`,
 `SECURITY.md`, `RUNBOOK.md`, `CASE_STUDY.md`, `BACKUP_FORMAT.md` — land in later phases.)
 
-## Repo layout (as of Phase 3)
+## Repo layout (as of Phase 4)
 
 ```
 apps/server/           Fastify + Socket.IO. Auth/device/discovery/conversations REST API, plus the
                         Socket.IO relay: handshake auth, per-device rooms, message send/deliver/ack,
                         ack-triggered purge, expiry sweeper + dormancy sweep (in-process intervals).
-apps/web/               Next.js App Router — single shell page, no real UI yet (Phase 5)
+apps/web/               Next.js App Router — single shell page, no real UI yet (Phase 5). COOP/COEP
+                        headers set (next.config.ts) for packages/local-store's OPFS backend.
 packages/db/            Drizzle schema (users, devices, oauth_accounts, conversations,
                         conversation_members, conversation_sequences, envelopes, envelope_targets)
                         + node-postgres client (ADR-0005) + migrations
+packages/local-store/   On-device chat history — Drizzle SQLite schema/repository shared by two
+                        backends (ADR-0006): node.ts (node:sqlite, tests), browser.ts
+                        (sqlocal/OPFS, "./browser" subpath export — never pulled into Node code).
+                        Tables: conversation_cursors (sync cursor only, not conversation metadata),
+                        timeline_entries (messages + gap/history_start/dormancy_return markers,
+                        local autoincrement id for pagination), outbox (offline send queue).
+packages/sync-engine/   Drives local-store from docs/REALTIME_PROTOCOL.md. createSyncEngine({socket,
+                        store, selfUserId, selfDeviceId}) — depends on socket.io-client directly
+                        (no custom transport abstraction). All inbound socket events + outbox
+                        flushes funnel through one serialized EventQueue so dormancy:return's
+                        fan-out can't race a concurrently-arriving envelope:deliver.
 packages/ui-tokens/     Design tokens (docs/UI_DIRECTION.md §5) + Tailwind preset
 packages/tsconfig/      Shared strict base tsconfig
 packages/eslint-config/ Shared flat ESLint config + Prettier config
@@ -155,6 +173,30 @@ had exposed the gap before), and the existing bcrypt password test was timing ou
 5s under the CPU contention of the now-larger full pipeline (fixed by raising
 `vitest.config.ts`'s `testTimeout`, unrelated to bcrypt's cost factor itself).
 
-Next: Phase 4 (Client sync engine & local-first store) — `packages/local-store`/`packages/sync-engine`
-consuming `docs/REALTIME_PROTOCOL.md`, including client-side gap-notice rendering
-(`docs/RETENTION.md` §6) from the sequence numbers and `dormancy:return` signal the relay now emits.
+**Phase 4 (Client sync engine & local-first store): complete on `main`.** `packages/local-store`
+(Drizzle SQLite schema + repository, two backends sharing every line of query code — `node:sqlite`
+for tests, `sqlocal`/OPFS for the browser, both via `drizzle-orm/sqlite-proxy`) and
+`packages/sync-engine` (drives the store from `docs/REALTIME_PROTOCOL.md`: gap/history-start
+classification on `envelope:deliver`, `dormancy:return` fan-out to every known conversation, an
+offline outbox with clientId reconciliation, ack only after the durable local write commits). The
+web store engine choice `ADR-0001` deferred to this phase is settled:
+[ADR-0006](docs/ADR/0006-local-store-engine.md). No UI yet (Phase 5) — headless packages, tested
+directly. 24 tests across both packages green, including the property `ADR-0003` explicitly
+requires (two independent stores fed divergent delivery streams both stay self-consistent, without
+converging — divergence is correct, not corruption) and a failure-path test proving a rejected
+local write never triggers an `envelope:ack`. Verified a second way, live: a headless-Chromium
+check (Playwright + Vite, COOP/COEP headers) drove the actual `browser.ts` through a real page
+reload and confirmed a written row survives in OPFS — this caught a real bug the Node suite's
+always-fresh `:memory:` databases couldn't (`applyMigrations` was silently re-running every
+migration on every store open because a raw `sql` query's row shape was read wrong; see ADR-0006),
+now fixed with a matching Node-side regression test using a real file-backed database. Also caught
+during implementation: `drizzle-orm/node-sqlite` (assumed available going into this phase) only
+exists in unreleased `1.0.0` release candidates, not any stable release — both backends were
+unified on `drizzle-orm/sqlite-proxy` instead, recorded in ADR-0006 rather than silently patched
+over. `apps/web/next.config.ts` now sets the COOP/COEP headers the OPFS backend needs, ahead of
+Phase 5 mounting a real page on top of this.
+
+Next: Phase 5 (Web client, portfolio-grade UI) — the first real UI, built on `packages/local-store`
+and `packages/sync-engine`: conversation list, thread view rendering the timeline (including gap
+notices and history-start), composer wired to `sendMessage`, and the actual browser wiring these
+packages were built headless for.

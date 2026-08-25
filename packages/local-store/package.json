@@ -1,0 +1,39 @@
+{
+  "name": "@driftline/local-store",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "default": "./dist/browser.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate && tsx scripts/build-migrations.ts"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.38.3",
+    "sqlocal": "^0.18.0"
+  },
+  "devDependencies": {
+    "@driftline/eslint-config": "workspace:*",
+    "@driftline/tsconfig": "workspace:*",
+    "@types/node": "^22.10.7",
+    "drizzle-kit": "^0.30.2",
+    "eslint": "^9.19.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.4"
+  }
+}

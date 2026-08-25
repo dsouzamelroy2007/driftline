@@ -63,3 +63,11 @@ CI does the same against a GitHub Actions Postgres service container — see `.g
 device registry, `/discovery`, conversations, and the Socket.IO relay (handshake auth, message
 send/deliver/ack — see [`docs/REALTIME_PROTOCOL.md`](docs/REALTIME_PROTOCOL.md)). `apps/web` runs
 the Next.js dev server on `:3000`.
+
+`packages/local-store` and `packages/sync-engine` are headless — no UI yet (Phase 5), but fully
+tested by `pnpm test`, no external services required (they run against Node's built-in `node:sqlite`,
+not the production browser backend). The production backend is SQLite Wasm over OPFS
+(`packages/local-store`'s `"./browser"` export, via `sqlocal`) — see
+[`docs/ADR/0006-local-store-engine.md`](docs/ADR/0006-local-store-engine.md) for why, and why it
+needs the `Cross-Origin-Opener-Policy`/`Cross-Origin-Embedder-Policy` headers already set in
+`apps/web/next.config.ts`.

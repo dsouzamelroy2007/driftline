@@ -1,0 +1,26 @@
+{
+  "name": "@driftline/sync-engine",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@driftline/local-store": "workspace:*",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "@driftline/eslint-config": "workspace:*",
+    "@driftline/tsconfig": "workspace:*",
+    "@types/node": "^22.10.7",
+    "eslint": "^9.19.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.4"
+  }
+}
