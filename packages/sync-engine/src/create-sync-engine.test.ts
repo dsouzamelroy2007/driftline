@@ -1,4 +1,5 @@
-import { createNodeLocalStore, getConversationCursor, listOutboxEntries, listTimeline, type NodeLocalStore } from "@driftline/local-store";
+import { getConversationCursor, listOutboxEntries, listTimeline } from "@driftline/local-store";
+import { createNodeLocalStore, type NodeLocalStore } from "@driftline/local-store/node";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createSyncEngine, type SyncEngine } from "./create-sync-engine.js";

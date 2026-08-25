@@ -20,6 +20,7 @@ import conversationsRoutes from "./modules/relay/conversations.routes.js";
 import { sweepDormantDevices } from "./modules/relay/dormancy.js";
 import { registerSocketHandlers } from "./modules/relay/socket.js";
 import { sweepExpiredEnvelopes } from "./modules/relay/sweeper.js";
+import storageRoutes from "./modules/storage/storage.routes.js";
 import usersRoutes from "./modules/users/users.routes.js";
 import appContext from "./plugins/app-context.js";
 import authPlugin from "./plugins/auth-plugin.js";
@@ -58,6 +59,7 @@ await app.register(usersRoutes);
 await app.register(devicesRoutes);
 await app.register(discoveryRoutes);
 await app.register(conversationsRoutes);
+await app.register(storageRoutes);
 
 await app.listen({ port: env.PORT, host: "0.0.0.0" });
 

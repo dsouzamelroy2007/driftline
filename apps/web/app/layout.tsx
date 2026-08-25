@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 
+import { OfflineBanner } from "../components/offline-banner";
 import "./globals.css";
+import { Providers } from "./providers";
 
 export const metadata: Metadata = {
   title: "Driftline",
@@ -14,7 +16,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="font-sans">{children}</body>
+      <body className="font-sans">
+        <Providers>
+          <OfflineBanner />
+          {children}
+        </Providers>
+      </body>
     </html>
   );
 }

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createNodeLocalStore } from "./node.js";
 import {
   appendOutboxEntry,
+  countMessagesAfter,
   getConversationCursor,
   insertDormancyReturnMarkers,
   insertIncomingEnvelope,
@@ -75,6 +76,26 @@ describe("insertIncomingEnvelope", () => {
     const timeline = await listTimeline(db, "conv-1");
     expect(timeline).toHaveLength(3); // history_start + seq 1 + seq 2 — the redelivery added nothing
     expect(await getConversationCursor(db, "conv-1")).toBe(2); // unchanged
+  });
+});
+
+describe("countMessagesAfter", () => {
+  it("counts only messages, not markers, strictly after the given id", async () => {
+    const { db } = await createNodeLocalStore();
+    await insertIncomingEnvelope(db, envelope({ seq: 1 })); // history_start + message
+    await insertIncomingEnvelope(db, envelope({ seq: 2 }));
+    await insertIncomingEnvelope(db, envelope({ seq: 5 })); // gap + message
+
+    expect(await countMessagesAfter(db, "conv-1", 0)).toBe(3);
+
+    const timeline = await listTimeline(db, "conv-1");
+    const firstMessageId = timeline.find((e) => e.kind === "message" && e.seq === 1)!.id;
+    expect(await countMessagesAfter(db, "conv-1", firstMessageId)).toBe(2);
+  });
+
+  it("is zero for an unknown conversation", async () => {
+    const { db } = await createNodeLocalStore();
+    expect(await countMessagesAfter(db, "conv-none", 0)).toBe(0);
   });
 });
 

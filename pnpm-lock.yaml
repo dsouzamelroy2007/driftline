@@ -84,6 +84,12 @@ importers:
 
   apps/web:
     dependencies:
+      '@driftline/local-store':
+        specifier: workspace:*
+        version: link:../../packages/local-store
+      '@driftline/sync-engine':
+        specifier: workspace:*
+        version: link:../../packages/sync-engine
       '@driftline/ui-tokens':
         specifier: workspace:*
         version: link:../../packages/ui-tokens
@@ -96,6 +102,9 @@ importers:
       react-dom:
         specifier: ^19.0.0
         version: 19.2.8(react@19.2.8)
+      socket.io-client:
+        specifier: ^4.8.1
+        version: 4.8.3(supports-color@7.2.0)
     devDependencies:
       '@driftline/eslint-config':
         specifier: workspace:*
@@ -121,6 +130,9 @@ importers:
       eslint-config-next:
         specifier: ^15.1.6
         version: 15.5.23(eslint@9.39.5(jiti@1.21.7)(supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3)
+      eslint-plugin-react-hooks:
+        specifier: ^5.2.0
+        version: 5.2.0(eslint@9.39.5(jiti@1.21.7)(supports-color@7.2.0))
       postcss:
         specifier: ^8.5.1
         version: 8.5.26
@@ -130,6 +142,9 @@ importers:
       typescript:
         specifier: ^5.7.3
         version: 5.9.3
+      vitest:
+        specifier: ^3.0.4
+        version: 3.2.7(@types/node@22.20.1)(jiti@1.21.7)(supports-color@7.2.0)(tsx@4.23.12)
 
   packages/db:
     dependencies:

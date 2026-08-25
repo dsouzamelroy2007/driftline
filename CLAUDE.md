@@ -59,20 +59,25 @@ docs/ADR/                           — 0001 stack, 0002 retention/storage, 0003
 listed in the master plan's repo layout — `ARCHITECTURE.md`, `SYNC_MODEL.md`, `SCALE.md`,
 `SECURITY.md`, `RUNBOOK.md`, `CASE_STUDY.md`, `BACKUP_FORMAT.md` — land in later phases.)
 
-## Repo layout (as of Phase 4)
+## Repo layout (as of Phase 5)
 
 ```
-apps/server/           Fastify + Socket.IO. Auth/device/discovery/conversations REST API, plus the
-                        Socket.IO relay: handshake auth, per-device rooms, message send/deliver/ack,
-                        ack-triggered purge, expiry sweeper + dormancy sweep (in-process intervals).
-apps/web/               Next.js App Router — single shell page, no real UI yet (Phase 5). COOP/COEP
-                        headers set (next.config.ts) for packages/local-store's OPFS backend.
+apps/server/           Fastify + Socket.IO. Auth/device/discovery/conversations/users/storage REST
+                        API, plus the Socket.IO relay: handshake auth, per-device rooms, message
+                        send/deliver/ack, ack-triggered purge, expiry sweeper + dormancy sweep
+                        (in-process intervals).
+apps/web/               Next.js App Router — the full Phase 5 UI (auth, Inbox, Thread, Settings; see
+                        below). COOP/COEP headers set (next.config.ts) for packages/local-store's
+                        OPFS backend.
 packages/db/            Drizzle schema (users, devices, oauth_accounts, conversations,
                         conversation_members, conversation_sequences, envelopes, envelope_targets)
                         + node-postgres client (ADR-0005) + migrations
 packages/local-store/   On-device chat history — Drizzle SQLite schema/repository shared by two
-                        backends (ADR-0006): node.ts (node:sqlite, tests), browser.ts
-                        (sqlocal/OPFS, "./browser" subpath export — never pulled into Node code).
+                        backends (ADR-0006): node.ts (node:sqlite, tests, "./node" subpath export),
+                        browser.ts (sqlocal/OPFS, "./browser" subpath export). Neither backend export
+                        is re-exported from the package's main index — that index must stay
+                        node:sqlite-free so apps/web can statically import it (Phase 5 caught this:
+                        the main index used to re-export node.ts, which broke the browser bundle).
                         Tables: conversation_cursors (sync cursor only, not conversation metadata),
                         timeline_entries (messages + gap/history_start/dormancy_return markers,
                         local autoincrement id for pagination), outbox (offline send queue).
@@ -93,31 +98,43 @@ Root scripts (`pnpm dev|build|lint|typecheck|test`) all delegate to Turborepo. C
 `apps/server` env vars: see `.env.example` at repo root — copy to `.env` (gitignored) with real
 Neon (`DATABASE_URL`), Upstash (`REDIS_URL`, must be the `rediss://` protocol string, not the REST
 URL), Resend (`RESEND_API_KEY`), a GitHub OAuth App (`GITHUB_CLIENT_ID`/`SECRET`), a generated
-`JWT_SECRET`, plus `RETENTION_WINDOW_DAYS`/`DEVICE_DORMANCY_DAYS` (both default 30). Run
+`JWT_SECRET`, plus `RETENTION_WINDOW_DAYS`/`DEVICE_DORMANCY_DAYS` (both default 30). `apps/web`
+needs `NEXT_PUBLIC_SERVER_URL` (the server's own HTTP + Socket.IO origin). Run
 `pnpm --filter @driftline/db db:migrate` once after schema changes.
 
 Auth API (all under `apps/server`, see ADR-0004 for the token model):
 `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /me`,
-`GET /devices`, `DELETE /devices/:id` (revoke — now also synchronously purges the device's pending
-envelope targets, see below), `GET /discovery` (service-discovery contract, Redis heartbeat
-registry), `POST /auth/magic-link/request`, `POST /auth/magic-link/verify` (Redis-backed,
-single-use via `GETDEL`), `GET /auth/oauth/github/start`, `GET /auth/oauth/github/callback`
-(redirects to `${WEB_ORIGIN}/auth/callback#accessToken=...&refreshToken=...` — that page doesn't
-exist yet, Phase 5). Rate-limited (`/auth/register`, `/auth/login`, `/auth/magic-link/request`,
-20/min, Redis-backed). Not built: Google OAuth (same pattern as GitHub's `oauth/github.service.ts`,
-deferred).
+`PATCH /me` (update `displayName`), `GET /users/lookup?email=` (exact-match lookup, powers Phase 5's
+New Chat), `GET /me/storage` (`{envelopeCount, oldestExpiresAt}` — the "you currently have N
+messages held on our servers" widget, counts distinct envelopes via `envelope_targets` joined to
+`envelopes`, never touches payload), `GET /devices`, `DELETE /devices/:id` (revoke — now also
+synchronously purges the device's pending envelope targets, see below), `GET /discovery`
+(service-discovery contract, Redis heartbeat registry), `POST /auth/magic-link/request`,
+`POST /auth/magic-link/verify` (Redis-backed, single-use via `GETDEL`), `GET
+/auth/oauth/github/start`, `GET /auth/oauth/github/callback` (redirects to
+`${WEB_ORIGIN}/auth/callback#accessToken=...&refreshToken=...`, handled by
+`apps/web/app/auth/callback/page.tsx` since Phase 5). Rate-limited (`/auth/register`, `/auth/login`,
+`/auth/magic-link/request`, 20/min, Redis-backed). Not built: Google OAuth (same pattern as
+GitHub's `oauth/github.service.ts`, deferred).
 
 Relay (Phase 3, `apps/server/src/modules/relay/`, full contract in `docs/REALTIME_PROTOCOL.md`):
-`POST /conversations`, `GET /conversations` (direct + group, ≤100 members). Socket.IO: handshake
-auth via the same access-token verification path as HTTP; `message:send` (ack-callback with
-`{envelopeId, seq}`), `envelope:deliver` (server → client), `envelope:ack` (client → server, the
-hot path that triggers the transactional purge), `dormancy:return` (gap-notice signal on
-reconnect). Purge paths: ack-triggered (same transaction, `SELECT ... FOR UPDATE` serializes
-concurrent acks on one envelope — see `modules/relay/purge.ts`), expiry sweeper, and device
-revocation, all logging `envelope_purged_total{reason}` with envelope ID + size only. Expiry
-sweeper and dormancy sweep run as in-process `setInterval`s (every 5 min), not a separate
-`infra/scripts/sweeper` — revisit only if this needs to move out-of-process (Phase 8/9). Not built:
-client-side gap-notice rendering (Phase 4), attachments/R2 (MVP+).
+`POST /conversations`, `GET /conversations` (direct + group, ≤100 members; each conversation now
+also carries a `members: {userId, displayName}[]` array, added in Phase 5 since the web client has
+no other way to render a conversation's name — `conversations` itself still has no `name` column,
+so a group's display name is derived client-side by joining member names;
+`apps/web/lib/conversation-name.ts`). Socket.IO: handshake auth via the same access-token
+verification path as HTTP; `message:send` (ack-callback with `{envelopeId, seq}`), `envelope:deliver`
+(server → client), `envelope:ack` (client → server, the hot path that triggers the transactional
+purge), `dormancy:return` (gap-notice signal on reconnect). Purge paths: ack-triggered (same
+transaction, `SELECT ... FOR UPDATE` serializes concurrent acks on one envelope — see
+`modules/relay/purge.ts`), expiry sweeper, and device revocation, all logging
+`envelope_purged_total{reason}` with envelope ID + size only. Expiry sweeper and dormancy sweep run
+as in-process `setInterval`s (every 5 min), not a separate `infra/scripts/sweeper` — revisit only if
+this needs to move out-of-process (Phase 8/9). Not built: presence, typing indicators, read receipts
+— `docs/RETENTION.md` §2 already reserves Redis TTL rows for presence/typing, but no relay event for
+either was ever implemented (checked directly against `modules/relay/socket.ts` during Phase 5); the
+web UI only shows sent/delivered, derived from ack. Also not built: attachments/R2 (MVP+), backup
+export/import and QR device linking (Phase 6).
 
 ## Working agreement reminders
 
@@ -196,7 +213,59 @@ unified on `drizzle-orm/sqlite-proxy` instead, recorded in ADR-0006 rather than 
 over. `apps/web/next.config.ts` now sets the COOP/COEP headers the OPFS backend needs, ahead of
 Phase 5 mounting a real page on top of this.
 
-Next: Phase 5 (Web client, portfolio-grade UI) — the first real UI, built on `packages/local-store`
-and `packages/sync-engine`: conversation list, thread view rendering the timeline (including gap
-notices and history-start), composer wired to `sendMessage`, and the actual browser wiring these
-packages were built headless for.
+**Phase 5 (Web client, portfolio-grade UI): complete on `main`.** The first real UI: full auth
+(register, login, magic link, GitHub OAuth callback, first-run onboarding), Inbox (conversation
+list with locally-computed preview/unread badge), Thread (message list with gap/history-start/
+dormancy-return notices, composer, offline outbox rendering, an ARIA live region for incoming
+messages), New Chat/New Group (email lookup), Conversation settings (member list; mute/pin are
+local-only UI state, no server support yet), Settings (profile edit, Device manager with revoke +
+dormancy countdown, the server-storage widget, Data & privacy with the retention transparency
+table), and public `/privacy` + `/terms`. Scoped deliberately narrower than `docs/UI_DIRECTION.md`'s
+full screen inventory — per `docs/ROADMAP.md`'s own phase sequencing, backup export/import, QR/
+WebRTC device linking, and client-side search all stay in Phase 6, not this one.
+
+Required four small additive server endpoints beyond what Phase 2–3 already had (all read-mostly,
+no schema changes — see the Auth API / Relay notes above for the exact shapes): `PATCH /me`,
+`GET /users/lookup`, `GET /me/storage`, and `GET /conversations` gaining a `members` array.
+
+Verified live against real Postgres + local Redis + two independent headless-Chromium browser
+contexts (Playwright), not just the unit suite: registered two accounts, started a direct chat,
+sent messages both directions over the real Socket.IO relay, confirmed OPFS survives a full page
+reload (the actual point of Phase 4), confirmed the unread badge and cross-device delivery both
+work, and confirmed a device's own logout+login reuses one device row rather than minting a new one
+each time. That last check caught a real bug — see below. Full pipeline (lint/typecheck/test/build,
+57 tests) green.
+
+Three real bugs found and fixed during this verification, none caught by the unit suite alone:
+1. `packages/local-store`'s main index re-exported `createNodeLocalStore` (from `node.ts`, which
+   imports `node:sqlite`) right alongside the browser-safe schema/repository exports. Harmless for
+   Node consumers, but the instant `apps/web` (or `packages/sync-engine`, which imports the main
+   index for its shared repository functions) got bundled for the browser, webpack tried to resolve
+   `node:sqlite` and failed. Fixed by giving `node.ts` its own `"./node"` subpath export (mirroring
+   `"./browser"`) and dropping it from the main index — the main index is now genuinely
+   platform-agnostic, which is also what ADR-0006 already wanted for Phase 10.
+2. The client was minting its own `crypto.randomUUID()` as a device id and reusing it forever,
+   assuming the server would treat it as that device's permanent identity. It doesn't:
+   `upsertDevice` (`auth.service.ts`) only *reuses* a device row when the id it's given matches an
+   *existing* row's own id — on first creation it always mints its own server-side uuid and ignores
+   whatever id the client proposed. A self-generated id that never actually matches a real row
+   silently minted a brand-new device on every single login. Fixed by persisting the
+   *server-returned* `device.id` after every successful auth (register/login/magic-link; OAuth's
+   redirect doesn't include a `Device` object, so that path decodes the unverified `deviceId` claim
+   already present on the access token instead) and sending that back on every subsequent call.
+3. The API client unconditionally set `Content-Type: application/json` even on bodyless requests
+   (`POST /auth/logout`, `DELETE /devices/:id`) — Fastify's JSON body parser rejects an empty body
+   sent with that header (`FST_ERR_CTP_EMPTY_JSON_BODY`, a 400). Fixed by only setting the header
+   when a body is actually present.
+
+Known gap, deliberately not fixed this phase: self-revoking your *own* currently-active device
+(as opposed to another device from a different session) correctly cuts the session per ADR-0004,
+but the client doesn't yet catch the resulting failed reconnect/refresh and force a clean logout —
+it surfaces as console noise rather than a graceful redirect to `/login`. Low priority (an unusual
+thing for a real user to do to themselves) but worth a small follow-up.
+
+Next: Phase 6 (Backup, device linking, media & client-side search) — builds on Phase 5's shell:
+encrypted backup export/import, QR + WebRTC device-to-device history transfer (with the
+backup-file fallback ADR-0003 already planned for), and local FTS5 search. Also a natural point to
+revisit the presence/typing/read-receipt gap noted above, and the deferred custom-group-name schema
+change, if either becomes worth prioritizing.

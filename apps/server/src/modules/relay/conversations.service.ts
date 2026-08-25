@@ -16,7 +16,46 @@ export interface CreateConversationInput {
   participantUserIds: string[];
 }
 
-export async function createConversation(db: Db, input: CreateConversationInput): Promise<Conversation> {
+export interface ConversationMemberSummary {
+  userId: string;
+  displayName: string;
+}
+
+// Conversations carry no name column (a group's display name is derived client-side from this
+// list — see docs/ADR for the deferred "custom group name" schema change), so every conversation
+// the client fetches needs its member roster attached.
+export interface ConversationWithMembers extends Conversation {
+  members: ConversationMemberSummary[];
+}
+
+async function attachMembers(db: Db, conversationList: Conversation[]): Promise<ConversationWithMembers[]> {
+  if (conversationList.length === 0) return [];
+
+  const conversationIds = conversationList.map((conversation) => conversation.id);
+  const rows = await db
+    .select({
+      conversationId: conversationMembers.conversationId,
+      userId: users.id,
+      displayName: users.displayName,
+    })
+    .from(conversationMembers)
+    .innerJoin(users, eq(conversationMembers.userId, users.id))
+    .where(inArray(conversationMembers.conversationId, conversationIds));
+
+  const membersByConversation = new Map<string, ConversationMemberSummary[]>();
+  for (const row of rows) {
+    const list = membersByConversation.get(row.conversationId) ?? [];
+    list.push({ userId: row.userId, displayName: row.displayName });
+    membersByConversation.set(row.conversationId, list);
+  }
+
+  return conversationList.map((conversation) => ({
+    ...conversation,
+    members: membersByConversation.get(conversation.id) ?? [],
+  }));
+}
+
+export async function createConversation(db: Db, input: CreateConversationInput): Promise<ConversationWithMembers> {
   const memberIds = Array.from(new Set([input.creatorId, ...input.participantUserIds]));
 
   if (input.type === "direct" && memberIds.length !== 2) {
@@ -34,28 +73,31 @@ export async function createConversation(db: Db, input: CreateConversationInput)
     throw new HttpError(400, "One or more participant user IDs do not exist");
   }
 
-  return db.transaction(async (tx) => {
+  const created = await db.transaction(async (tx) => {
     const [conversation] = await tx.insert(conversations).values({ type: input.type }).returning();
-    const created = conversation!;
-    await tx.insert(conversationSequences).values({ conversationId: created.id, seq: 0 });
+    const row = conversation!;
+    await tx.insert(conversationSequences).values({ conversationId: row.id, seq: 0 });
     await tx.insert(conversationMembers).values(
       memberIds.map((userId) => ({
-        conversationId: created.id,
+        conversationId: row.id,
         userId,
         role: userId === input.creatorId ? ("admin" as const) : ("member" as const),
       })),
     );
-    return created;
+    return row;
   });
+
+  const [withMembers] = await attachMembers(db, [created]);
+  return withMembers!;
 }
 
-export async function listConversationsForUser(db: Db, userId: string): Promise<Conversation[]> {
+export async function listConversationsForUser(db: Db, userId: string): Promise<ConversationWithMembers[]> {
   const rows = await db
     .select({ conversation: conversations })
     .from(conversationMembers)
     .innerJoin(conversations, eq(conversationMembers.conversationId, conversations.id))
     .where(eq(conversationMembers.userId, userId));
-  return rows.map((row) => row.conversation);
+  return attachMembers(db, rows.map((row) => row.conversation));
 }
 
 export async function isConversationMember(db: Db, conversationId: string, userId: string): Promise<boolean> {

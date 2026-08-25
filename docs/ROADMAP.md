@@ -15,7 +15,10 @@ linking)**, push notifications.
 > stretch). This is recorded in [ADR-0003](ADR/0003-multi-device-sync-without-server-history.md)
 > along with the fallback plan if the WebRTC work proves too costly mid-Phase-6.
 
-**MVP+** — attachments, reactions, replies, edit/delete-for-everyone, link previews, voice notes.
+**MVP+** — attachments, reactions, replies, edit/delete-for-everyone, link previews, voice notes,
+custom emoji/sticker packs (WhatsApp-style — sends as an attachment referencing a sticker asset,
+not inline text, so it rides on the same attachments/R2 work rather than needing its own storage
+path).
 
 **Stretch** (only after Phase 13, only if requested) — E2E encryption, calls, status/stories,
 disappearing messages shorter than 30 days, admin/moderation tooling, i18n, desktop via Tauri.

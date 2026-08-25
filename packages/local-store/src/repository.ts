@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lt } from "drizzle-orm";
 
 import { conversationCursors, outbox, timelineEntries, type OutboxEntry, type OutboxStatus, type TimelineEntry } from "./schema.js";
 import type { LocalStoreDb, LocalStoreTx } from "./types.js";
@@ -169,6 +169,17 @@ export async function listTimeline(
     .where(and(...conditions))
     .orderBy(desc(timelineEntries.id))
     .limit(limit);
+}
+
+// Powers the Inbox's unread badge (docs/UI_DIRECTION.md §2) — the "read" boundary itself is tracked
+// client-side (apps/web's localStorage, not this schema), since it's a per-viewport UI concern, not
+// sync/delivery state; this just counts "message" entries newer than whatever id the caller passes.
+export async function countMessagesAfter(db: LocalStoreDb, conversationId: string, afterId: number): Promise<number> {
+  const rows = await db
+    .select({ id: timelineEntries.id })
+    .from(timelineEntries)
+    .where(and(eq(timelineEntries.conversationId, conversationId), eq(timelineEntries.kind, "message"), gt(timelineEntries.id, afterId)));
+  return rows.length;
 }
 
 export interface NewOutboxInput {
