@@ -145,7 +145,7 @@ squeezed into generic settings patterns:
 - **Backup nagging**: a persistent-but-not-annoying health indicator ("last backup: 6 days ago"),
   escalating tone only after a genuinely long gap, with a snooze that actually holds (modeled on
   Signal's restraint, not WhatsApp's modal interruptions).
-  **Reminder cadence (concrete default, refine in Phase 6):** first nag at 7 days since last backup
+  **Reminder cadence (implemented as-is in Phase 6, `apps/web/lib/backup-nag.ts`):** first nag at 7 days since last backup
   or since account creation if never backed up; escalates to a stronger visual treatment at 30 days;
   snooze holds for 7 days before resurfacing, capped so it can be snoozed at most 4 times consecutively
   before the next prompt cannot be snoozed (must dismiss with an explicit "I understand the risk").

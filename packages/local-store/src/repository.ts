@@ -171,6 +171,101 @@ export async function listTimeline(
     .limit(limit);
 }
 
+// Full, unpaginated history for one conversation, oldest-first — used by backup export and
+// device-linking transfer (packages/backup), which need everything, not a page of it. Not used by
+// any live-sync path; listTimeline's newest-first pagination remains the UI's read path.
+export async function listAllTimelineEntries(db: LocalStoreDb, conversationId: string): Promise<TimelineEntry[]> {
+  return db
+    .select()
+    .from(timelineEntries)
+    .where(and(eq(timelineEntries.conversationId, conversationId), eq(timelineEntries.kind, "message")))
+    .orderBy(asc(timelineEntries.id));
+}
+
+export interface ImportEntryInput {
+  envelopeId: string;
+  senderId: string;
+  senderDeviceId: string;
+  seq: number;
+  contentType: string;
+  payload: string;
+  createdAt: Date;
+}
+
+export interface ImportConversationInput {
+  conversationId: string;
+  cursorSeq: number;
+  entries: ImportEntryInput[];
+}
+
+export interface ImportTimelineEntriesResult {
+  conversationsImported: number;
+  entriesImported: number;
+}
+
+// Bulk-writes historical data from a decrypted backup file or a completed device-linking transfer
+// (packages/backup) — deliberately bypasses classifyAndAdvanceCursor, which assumes strictly
+// sequential server-assigned seq and isn't meaningful for a batch of already-ordered history. Dedup
+// is via the existing envelopeId UNIQUE index (re-importing the same backup twice is a no-op, not an
+// error). The cursor is advanced to the *max* of whatever it already was and the imported
+// conversation's cursorSeq, never backwards — importing an old backup onto a device with newer
+// independent history must not regress its live-sync cursor.
+//
+// Correct chronological rendering (listTimeline orders by local insertion id) is only guaranteed
+// when the target conversation has no prior local rows, which is the designed use case (ADR-0003:
+// new/reinstalled devices always start empty). Callers must pass entries pre-sorted oldest-first;
+// importing into a non-empty conversation is allowed (the "divergent but self-consistent" case
+// ADR-0003 anticipates) but its resulting local order is a documented known limitation, not fixed
+// here. The outbox table is intentionally untouched by import — it is a separate, unrelated concern.
+export async function importTimelineEntries(
+  db: LocalStoreDb,
+  conversations: ImportConversationInput[],
+): Promise<ImportTimelineEntriesResult> {
+  let entriesImported = 0;
+
+  await db.transaction(async (tx) => {
+    for (const conversation of conversations) {
+      for (const entry of conversation.entries) {
+        await tx
+          .insert(timelineEntries)
+          .values({
+            conversationId: conversation.conversationId,
+            kind: "message",
+            envelopeId: entry.envelopeId,
+            senderId: entry.senderId,
+            senderDeviceId: entry.senderDeviceId,
+            seq: entry.seq,
+            contentType: entry.contentType,
+            payload: entry.payload,
+            createdAt: entry.createdAt,
+          })
+          .onConflictDoNothing({ target: timelineEntries.envelopeId });
+        entriesImported += 1;
+      }
+
+      const [cursorRow] = await tx
+        .select()
+        .from(conversationCursors)
+        .where(eq(conversationCursors.conversationId, conversation.conversationId));
+
+      if (!cursorRow) {
+        await tx.insert(conversationCursors).values({
+          conversationId: conversation.conversationId,
+          lastSeenSeq: conversation.cursorSeq,
+          updatedAt: new Date(),
+        });
+      } else if (conversation.cursorSeq > cursorRow.lastSeenSeq) {
+        await tx
+          .update(conversationCursors)
+          .set({ lastSeenSeq: conversation.cursorSeq, updatedAt: new Date() })
+          .where(eq(conversationCursors.conversationId, conversation.conversationId));
+      }
+    }
+  });
+
+  return { conversationsImported: conversations.length, entriesImported };
+}
+
 // Powers the Inbox's unread badge (docs/UI_DIRECTION.md §2) — the "read" boundary itself is tracked
 // client-side (apps/web's localStorage, not this schema), since it's a per-viewport UI concern, not
 // sync/delivery state; this just counts "message" entries newer than whatever id the caller passes.

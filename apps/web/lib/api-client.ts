@@ -120,3 +120,7 @@ export function createConversation(
 export function getStorageSummary(accessToken: string): Promise<StorageSummary> {
   return request("/me/storage", authed(accessToken));
 }
+
+export function startDeviceLink(accessToken: string): Promise<{ code: string; expiresAt: string }> {
+  return request("/devices/link/start", { method: "POST", ...authed(accessToken) });
+}

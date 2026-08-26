@@ -41,6 +41,10 @@ function DevicesContent() {
         <h1 className="text-lg font-semibold text-text-primary">Devices</h1>
       </header>
 
+      <Link href="/settings/link-device" className={linkClass}>
+        Link a new device →
+      </Link>
+
       {!devices ? (
         <p className="text-text-muted" role="status">
           Loading…

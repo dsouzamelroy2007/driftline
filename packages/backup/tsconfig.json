@@ -1,0 +1,15 @@
+{
+  "extends": "@driftline/tsconfig/base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": ["node"],
+    // DOM adds Crypto/CryptoKey/SubtleCrypto/BufferSource ambient types for crypto.ts's Web Crypto
+    // usage — this package runs isomorphically (browser + Node test), and Node's own @types/node
+    // only exposes these under the node:crypto webcrypto namespace, not as ambient globals.
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["src"]
+}

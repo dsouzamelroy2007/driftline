@@ -59,7 +59,7 @@ docs/ADR/                           — 0001 stack, 0002 retention/storage, 0003
 listed in the master plan's repo layout — `ARCHITECTURE.md`, `SYNC_MODEL.md`, `SCALE.md`,
 `SECURITY.md`, `RUNBOOK.md`, `CASE_STUDY.md`, `BACKUP_FORMAT.md` — land in later phases.)
 
-## Repo layout (as of Phase 5)
+## Repo layout (as of Phase 6, part 1)
 
 ```
 apps/server/           Fastify + Socket.IO. Auth/device/discovery/conversations/users/storage REST
@@ -81,11 +81,23 @@ packages/local-store/   On-device chat history — Drizzle SQLite schema/reposit
                         Tables: conversation_cursors (sync cursor only, not conversation metadata),
                         timeline_entries (messages + gap/history_start/dormancy_return markers,
                         local autoincrement id for pagination), outbox (offline send queue).
+                        Phase 6 added importTimelineEntries (bulk-writes historical data from a
+                        backup or a device-linking transfer, bypassing the live-sync seq-sequential
+                        classifyAndAdvanceCursor path entirely — see docs/RETENTION.md's bulk-import
+                        note) and listAllTimelineEntries (full unpaginated history, for export).
 packages/sync-engine/   Drives local-store from docs/REALTIME_PROTOCOL.md. createSyncEngine({socket,
                         store, selfUserId, selfDeviceId}) — depends on socket.io-client directly
                         (no custom transport abstraction). All inbound socket events + outbox
                         flushes funnel through one serialized EventQueue so dormancy:return's
                         fan-out can't race a concurrently-arriving envelope:deliver.
+packages/backup/        Encrypted backup export/import + the device-linking P2P wire format
+                        (docs/ADR/0007, docs/BACKUP_FORMAT.md). Web Crypto only (PBKDF2-SHA256 ->
+                        AES-256-GCM), no crypto dependency — works identically in the browser and
+                        Node (tests), same reasoning as ADR-0006. Depends on @driftline/local-store
+                        the way sync-engine does. exportBackup/importBackup (file format, passphrase-
+                        encrypted) and collectBackupPayload/applyBackupPayload/chunkBackupPayload/
+                        createChunkReassembler (the shared plaintext model + P2P chunking adapter,
+                        no passphrase layer — the WebRTC data channel is already DTLS-encrypted).
 packages/ui-tokens/     Design tokens (docs/UI_DIRECTION.md §5) + Tailwind preset
 packages/tsconfig/      Shared strict base tsconfig
 packages/eslint-config/ Shared flat ESLint config + Prettier config
@@ -108,7 +120,9 @@ Auth API (all under `apps/server`, see ADR-0004 for the token model):
 New Chat), `GET /me/storage` (`{envelopeCount, oldestExpiresAt}` — the "you currently have N
 messages held on our servers" widget, counts distinct envelopes via `envelope_targets` joined to
 `envelopes`, never touches payload), `GET /devices`, `DELETE /devices/:id` (revoke — now also
-synchronously purges the device's pending envelope targets, see below), `GET /discovery`
+synchronously purges the device's pending envelope targets, see below), `POST /devices/link/start`
+(authed, rate-limited — mints an 8-digit device-linking pairing code, Redis-only state, 120s TTL;
+see Relay note below), `GET /discovery`
 (service-discovery contract, Redis heartbeat registry), `POST /auth/magic-link/request`,
 `POST /auth/magic-link/verify` (Redis-backed, single-use via `GETDEL`), `GET
 /auth/oauth/github/start`, `GET /auth/oauth/github/callback` (redirects to
@@ -125,16 +139,24 @@ so a group's display name is derived client-side by joining member names;
 `apps/web/lib/conversation-name.ts`). Socket.IO: handshake auth via the same access-token
 verification path as HTTP; `message:send` (ack-callback with `{envelopeId, seq}`), `envelope:deliver`
 (server → client), `envelope:ack` (client → server, the hot path that triggers the transactional
-purge), `dormancy:return` (gap-notice signal on reconnect). Purge paths: ack-triggered (same
-transaction, `SELECT ... FOR UPDATE` serializes concurrent acks on one envelope — see
-`modules/relay/purge.ts`), expiry sweeper, and device revocation, all logging
-`envelope_purged_total{reason}` with envelope ID + size only. Expiry sweeper and dormancy sweep run
-as in-process `setInterval`s (every 5 min), not a separate `infra/scripts/sweeper` — revisit only if
-this needs to move out-of-process (Phase 8/9). Not built: presence, typing indicators, read receipts
-— `docs/RETENTION.md` §2 already reserves Redis TTL rows for presence/typing, but no relay event for
-either was ever implemented (checked directly against `modules/relay/socket.ts` during Phase 5); the
-web UI only shows sent/delivered, derived from ack. Also not built: attachments/R2 (MVP+), backup
-export/import and QR device linking (Phase 6).
+purge), `dormancy:return` (gap-notice signal on reconnect). Phase 6 added device linking
+(`docs/ADR/0008-device-linking-protocol.md`, full event contract in `docs/REALTIME_PROTOCOL.md`):
+`device-link:join` (source device, ack-callback), `device-link:peer-joined` (server → host),
+`device-link:signal` (bidirectional, opaque SDP/ICE relay, validated against the matched pairing
+session), `device-link:cancel`/`device-link:cancelled` — all backed by `modules/devices/device-link.
+service.ts`'s Redis pairing session (WATCH/MULTI for atomic join, not EVAL — Upstash EVAL support is
+unreliable), never Postgres, and the actual history transfer happens over a direct WebRTC data
+channel the server never sees (STUN-only, no TURN; 18s no-signal timeout falls back to backup
+export/import). Purge paths: ack-triggered (same transaction, `SELECT ... FOR UPDATE` serializes
+concurrent acks on one envelope — see `modules/relay/purge.ts`), expiry sweeper, and device
+revocation, all logging `envelope_purged_total{reason}` with envelope ID + size only. Expiry sweeper
+and dormancy sweep run as in-process `setInterval`s (every 5 min), not a separate
+`infra/scripts/sweeper` — revisit only if this needs to move out-of-process (Phase 8/9). Not built:
+presence, typing indicators, read receipts — `docs/RETENTION.md` §2 already reserves Redis TTL rows
+for presence/typing, but no relay event for either was ever implemented (checked directly against
+`modules/relay/socket.ts` during Phase 5); the web UI only shows sent/delivered, derived from ack.
+Also not built: attachments/R2 and client-side search (both deferred to a Phase 6 follow-up pass —
+this pass covered backup export/import and device linking only, see Status below).
 
 ## Working agreement reminders
 
@@ -264,8 +286,62 @@ but the client doesn't yet catch the resulting failed reconnect/refresh and forc
 it surfaces as console noise rather than a graceful redirect to `/login`. Low priority (an unusual
 thing for a real user to do to themselves) but worth a small follow-up.
 
-Next: Phase 6 (Backup, device linking, media & client-side search) — builds on Phase 5's shell:
-encrypted backup export/import, QR + WebRTC device-to-device history transfer (with the
-backup-file fallback ADR-0003 already planned for), and local FTS5 search. Also a natural point to
-revisit the presence/typing/read-receipt gap noted above, and the deferred custom-group-name schema
-change, if either becomes worth prioritizing.
+**Phase 6, part 1 (Backup export/import & device linking): complete on `main`.** Both of the two
+"coming soon" stubs Phase 5 left in the thread's gap-notice buttons are now real. New package
+`packages/backup` (Web Crypto only — PBKDF2-SHA256 → AES-256-GCM, no crypto dependency) implements
+encrypted backup file export/import and the plaintext model shared with device-to-device transfer
+(`docs/ADR/0007-backup-format.md`, `docs/BACKUP_FORMAT.md`). Device linking
+(`docs/ADR/0008-device-linking-protocol.md`) adds a Redis-only pairing-session flow — an 8-digit
+code doubling as both the QR payload and the manual-entry fallback, capped at 8 wrong-account
+attempts (not brute-forceable via length alone), atomic join via `WATCH`/`MULTI` (not `EVAL` —
+Upstash's Lua-scripting support is unreliable) — plus three new Socket.IO events
+(`device-link:join/signal/cancel`, full contract in `docs/REALTIME_PROTOCOL.md`) that relay WebRTC
+offer/answer/ICE between the two devices, STUN-only, with an 18-second no-signal timeout that falls
+back to backup export/import per ADR-0003. New web UI: `/settings/backup` (export/import, with an
+unsent-outbox warning before import) and `/settings/link-device` (QR host/scan via `qrcode` +
+`BarcodeDetector`/`jsQR`, plus manual code entry), and the backup-nagging banner from
+`docs/UI_DIRECTION.md` §8. Media/attachments (R2) and client-side search stay out of scope for this
+pass — a separate follow-up — per an explicit scoping decision made with the user before starting.
+
+`packages/local-store` gained `importTimelineEntries` (bulk-write, bypassing the live-sync
+seq-sequential `classifyAndAdvanceCursor` path entirely — see `docs/RETENTION.md`'s bulk-import
+note) and `listAllTimelineEntries` (full unpaginated history, for export). Automated tests cover
+both new packages plus the server's REST/schema layer; the Redis-backed pairing-session state
+machine itself has no automated test — consistent with this codebase's existing pattern (no other
+Redis-backed flow, including magic-link, has one either; there's no Redis service container in CI)
+— and was instead verified live, alongside everything else.
+
+Verified live against the real dev Neon + Upstash instances (the same ones `pnpm dev` already used),
+with two-and-three-way headless-Chromium Playwright sessions actually completing both flows
+end-to-end: exported an encrypted backup from one device, imported it on a freshly-logged-in second
+device for the same account, and confirmed the message reappeared; separately, linked a brand-new
+device to an existing one carrying real history over an actual WebRTC data channel (STUN, no TURN)
+via the manual-code path, transfer completing in under 2 seconds. Two real bugs found and fixed
+during this pass, neither caught by the unit suite:
+
+1. `useDeviceLinkHost`'s `start()` (`apps/web/lib/device-link-client.ts`) refused to run at all
+   unless the sync socket was already connected — but minting a pairing code is a plain REST call
+   that never touches the socket; only the *listener* for a peer joining needs it, and that's wired
+   up separately and re-subscribes whenever the socket becomes ready. A user who opened
+   `/settings/link-device` and clicked "Show my code" quickly (a very normal thing to do) got
+   silently nothing. Fixed by dropping the unnecessary guard; the analogous (and legitimate, since
+   `join()` really does need to emit on the socket immediately) guard on the source side now at
+   least surfaces "Still connecting — wait a moment and try again" instead of silently no-op'ing.
+2. Live verification itself first mis-diagnosed the same symptom as an app bug, because the test
+   script used full-page `goto()` for in-app navigation — which, unlike a real `<Link>` click, tears
+   down and re-mounts every provider (socket, local-store) on every navigation. Switching the script
+   to click real in-app links resolved it; worth noting here because it's the kind of false-negative
+   this project's "live verification, not just unit tests" pattern exists to catch even when the
+   live check's own harness is initially wrong.
+
+Full pipeline (lint/typecheck/test/build) green per-package; the one failure seen running the
+complete `turbo run lint typecheck test build` in a single pass was `apps/server`'s bcrypt password
+test timing out under the CPU contention of everything building/testing at once simultaneously —
+already a known, previously-worked-around flake (see Phase 3's notes), reproduced again here but not
+caused by this phase's changes, confirmed by every package passing cleanly in isolation.
+
+Next: Phase 6, part 2 (media/attachments via R2, client-side FTS5 search) — the remainder of the
+original Phase 6 scope, deferred by explicit agreement before this pass started since it needs a new
+Cloudflare R2 account (user credentials) and is a large enough scope on its own. Also still open: the
+presence/typing/read-receipt gap and the deferred custom-group-name schema change noted in Phase 5,
+revisit if either becomes worth prioritizing.

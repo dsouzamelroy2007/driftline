@@ -13,6 +13,7 @@ import { createRedisClient } from "./lib/redis.js";
 import authRoutes from "./modules/auth/auth.routes.js";
 import magicLinkRoutes from "./modules/auth/magic-link.routes.js";
 import oauthRoutes from "./modules/auth/oauth/oauth.routes.js";
+import deviceLinkRoutes from "./modules/devices/device-link.routes.js";
 import devicesRoutes from "./modules/devices/devices.routes.js";
 import discoveryRoutes from "./modules/discovery/discovery.routes.js";
 import { startDiscoveryHeartbeat } from "./modules/discovery/discovery.service.js";
@@ -57,6 +58,7 @@ await app.register(magicLinkRoutes);
 await app.register(oauthRoutes);
 await app.register(usersRoutes);
 await app.register(devicesRoutes);
+await app.register(deviceLinkRoutes);
 await app.register(discoveryRoutes);
 await app.register(conversationsRoutes);
 await app.register(storageRoutes);
@@ -67,7 +69,7 @@ const io = new SocketIOServer(app.server, {
   cors: { origin: env.WEB_ORIGIN },
 });
 
-registerSocketHandlers(io, { db, env });
+registerSocketHandlers(io, { db, env, redis });
 
 startDiscoveryHeartbeat(redis, randomUUID(), env.DISCOVERY_HOST);
 

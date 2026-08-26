@@ -118,9 +118,21 @@ thread — never a silent hole in the timeline. It fires when the sync engine de
 
 Copy is factual, not apologetic-sounding filler: *"Messages sent while this device was offline are no
 longer available. Restore from a backup or sync from another device to recover them."* It links
-directly to backup import and device-linking flows (Phase 6). Gap notices are computed client-side
-from cursor/sequence state — the server does not need to know a gap "happened" beyond the fact that
-it purged something; the client infers the gap from what it can no longer fetch.
+directly to `/settings/backup` and `/settings/link-device` (Phase 6, `docs/ADR/0007` /
+`docs/ADR/0008`). Gap notices are computed client-side from cursor/sequence state — the server does
+not need to know a gap "happened" beyond the fact that it purged something; the client infers the gap
+from what it can no longer fetch.
+
+**Bulk import (backup restore or a completed device-linking transfer) bypasses this classification
+entirely** — `packages/local-store`'s `importTimelineEntries` writes historical rows directly and
+only advances `conversation_cursors.lastSeenSeq` (never backward), rather than routing each entry
+through `classifyAndAdvanceCursor` (§6 above's `insertIncomingEnvelope` path). That function assumes
+strictly sequential server-assigned `seq` arriving one at a time over the live socket connection — a
+batch of already-ordered history from a backup file or a peer device doesn't fit that model, and
+forcing it through per-entry gap/history-start classification would just manufacture spurious gap
+markers for every entry after the first. See `docs/BACKUP_FORMAT.md` §4 for the full import
+semantics (dedup, cursor-forward-only, and the known chronological-ordering limitation when
+importing into a non-empty conversation).
 
 ## 7. Purge triggers — implementation checklist
 

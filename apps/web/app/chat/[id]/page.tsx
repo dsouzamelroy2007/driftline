@@ -28,11 +28,11 @@ function GapOrSystemNotice({ entry }: { entry: TimelineEntry }) {
       <p className="text-text-muted">{copy.body}</p>
       {copy.showRecoveryActions && (
         <div className="flex justify-center gap-4 text-xs">
-          <Link href="/settings" className={linkClass}>
-            Import backup (Phase 6)
+          <Link href="/settings/backup" className={linkClass}>
+            Import backup
           </Link>
-          <Link href="/settings" className={linkClass}>
-            Link a device (Phase 6)
+          <Link href="/settings/link-device" className={linkClass}>
+            Link a device
           </Link>
         </div>
       )}

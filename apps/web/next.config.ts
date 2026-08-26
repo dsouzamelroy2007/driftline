@@ -12,6 +12,10 @@ const nextConfig: NextConfig = {
         headers: [
           { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
           { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
+          // Delegates camera access to same-origin only — needed for the device-linking QR scanner
+          // (Settings > Device linking); without this, camera permission is denied by default in
+          // browsers that ship a locked-down default Permissions-Policy.
+          { key: "Permissions-Policy", value: "camera=(self)" },
         ],
       },
     ];

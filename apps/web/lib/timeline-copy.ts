@@ -8,8 +8,8 @@ export interface NoticeCopy {
 }
 
 // Factual tone, always paired with recovery actions for anything that means missed history
-// (docs/UI_DIRECTION.md §8) — these two flows (backup import, device linking) ship in Phase 6, so
-// the buttons route to Settings with a "coming soon" note rather than doing nothing.
+// (docs/UI_DIRECTION.md §8) — the two recovery actions link to /settings/backup and
+// /settings/link-device.
 export function noticeCopyFor(entry: Pick<TimelineEntry, "kind" | "gapFromSeq" | "gapToSeq">): NoticeCopy {
   switch (entry.kind) {
     case "gap":

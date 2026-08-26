@@ -72,6 +72,12 @@ function SettingsContent() {
         <Link href="/settings/devices" className={secondaryButtonClass + " text-center"}>
           Devices
         </Link>
+        <Link href="/settings/backup" className={secondaryButtonClass + " text-center"}>
+          Backup &amp; restore
+        </Link>
+        <Link href="/settings/link-device" className={secondaryButtonClass + " text-center"}>
+          Link a device
+        </Link>
         <Link href="/settings/privacy" className={secondaryButtonClass + " text-center"}>
           Data &amp; privacy
         </Link>

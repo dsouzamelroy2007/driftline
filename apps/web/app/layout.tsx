@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { BackupNagBanner } from "../components/backup-nag-banner";
 import { OfflineBanner } from "../components/offline-banner";
 import "./globals.css";
 import { Providers } from "./providers";
@@ -19,6 +20,7 @@ export default function RootLayout({
       <body className="font-sans">
         <Providers>
           <OfflineBanner />
+          <BackupNagBanner />
           {children}
         </Providers>
       </body>

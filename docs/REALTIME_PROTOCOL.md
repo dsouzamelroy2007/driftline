@@ -103,6 +103,55 @@ after a dropped connection is always safe).
 
 See §3 point 2. Purely a signal; the client is responsible for rendering the gap notice.
 
+### `device-link:join` (client → server, with ack callback)
+
+```ts
+socket.emit("device-link:join", { code: string }, (response: { hostDeviceId: string } | { error: string }) => { ... });
+```
+
+Device linking (ADR-0003 §4, `docs/ADR/0008-device-linking-protocol.md`) — a new/empty device (the
+"host") calls `POST /devices/link/start` to mint an 8-digit pairing code, then the device that
+already has history (the "source") emits this once it has that code (scanned or typed). The server
+validates the code against a short-lived Redis session (never Postgres) and — on success — acks with
+the host's `deviceId` and emits `device-link:peer-joined` into the host's room. Every failure case
+(expired, already matched, wrong account, attempts exhausted) acks with the same generic
+`{ error: "Invalid or expired code" }` — there is no oracle for which one it was.
+
+### `device-link:peer-joined` (server → client, host only)
+
+```ts
+socket.on("device-link:peer-joined", (payload: { sourceDeviceId: string }) => { ... });
+```
+
+Tells the host which device just joined its pairing session, so it can start the WebRTC handshake
+(it doesn't create an `RTCPeerConnection` before this — no peer to connect to yet).
+
+### `device-link:signal` (bidirectional, no response)
+
+```ts
+socket.emit("device-link:signal", { code: string, targetDeviceId: string, signal: unknown });
+socket.on("device-link:signal", (payload: { fromDeviceId: string; signal: unknown }) => { ... });
+```
+
+A generic, validated relay for WebRTC offer/answer/ICE-candidate exchange — `signal` is opaque JSON
+the server never parses (ADR-0003: signaling only, never content). The server checks that the sender
+and `targetDeviceId` are exactly the two device IDs recorded on that specific matched pairing
+session before forwarding, so this can't be used as a general arbitrary-device messaging channel.
+
+### `device-link:cancel` (client → server, no response)
+
+```ts
+socket.emit("device-link:cancel", { code: string });
+```
+
+Idempotent, callable by either the host or the source of a session. Deletes the Redis pairing
+session immediately (not just a status flag) and emits `device-link:cancelled` to whichever other
+device was involved in it, so its UI doesn't sit waiting for its own stall timeout.
+
+### `device-link:cancelled` (server → client, no payload)
+
+Fired at the device that didn't call `device-link:cancel`, telling it the other side backed out.
+
 ## 5. What the client must not assume
 
 - **No replay.** There is no "give me everything since sequence N" event. A sequence gap (the next
@@ -115,3 +164,8 @@ See §3 point 2. Purely a signal; the client is responsible for rendering the ga
 - **No delivery guarantee beyond the 30-day window.** If every recipient device is dormant/offline
   for the entire window, the sweeper purges the envelope unconditionally at `expiresAt`
   (`docs/RETENTION.md` §3) — the sender does not get a distinct "expired without delivery" signal.
+- **No server-side device-linking transfer.** `device-link:*` is signaling only — the actual history
+  transfer happens over a direct WebRTC data channel between the two devices; the server never sees
+  it, the same way it never sees a message body. A pairing session (Redis, 120s TTL) is deleted the
+  moment it's matched-and-signaled to completion, cancelled, or expires — it is never a durable
+  record of who linked with whom.

@@ -5,12 +5,15 @@ import {
   appendOutboxEntry,
   countMessagesAfter,
   getConversationCursor,
+  importTimelineEntries,
   insertDormancyReturnMarkers,
   insertIncomingEnvelope,
+  listAllTimelineEntries,
   listKnownConversationIds,
   listOutboxEntries,
   listTimeline,
   reconcileOutboxEntry,
+  type ImportConversationInput,
   type IncomingEnvelope,
 } from "./repository.js";
 
@@ -172,5 +175,92 @@ describe("outbox", () => {
     const result = await insertIncomingEnvelope(db, envelope({ seq: 2, conversationId: "conv-1" }));
 
     expect(result.classification).toBe("ok"); // not "gap" — the sender's own cursor advance made this contiguous
+  });
+});
+
+function importConversation(overrides: Partial<ImportConversationInput> = {}): ImportConversationInput {
+  return {
+    conversationId: "conv-imported",
+    cursorSeq: 3,
+    entries: [1, 2, 3].map((seq) => ({
+      envelopeId: `env-import-${seq}`,
+      senderId: "user-b",
+      senderDeviceId: "device-b",
+      seq,
+      contentType: "text/plain",
+      payload: "aGVsbG8=",
+      createdAt: new Date(1_000 * seq),
+    })),
+    ...overrides,
+  };
+}
+
+describe("importTimelineEntries", () => {
+  it("bulk-writes entries into an empty conversation and advances the cursor to cursorSeq", async () => {
+    const { db } = await createNodeLocalStore();
+
+    const result = await importTimelineEntries(db, [importConversation()]);
+
+    expect(result).toEqual({ conversationsImported: 1, entriesImported: 3 });
+    const timeline = await listAllTimelineEntries(db, "conv-imported");
+    expect(timeline.map((e) => e.seq)).toEqual([1, 2, 3]);
+    expect(timeline.every((e) => e.kind === "message")).toBe(true);
+    expect(await getConversationCursor(db, "conv-imported")).toBe(3);
+  });
+
+  it("re-importing the same backup is a no-op (dedup via envelopeId)", async () => {
+    const { db } = await createNodeLocalStore();
+    await importTimelineEntries(db, [importConversation()]);
+
+    await importTimelineEntries(db, [importConversation()]);
+
+    const timeline = await listAllTimelineEntries(db, "conv-imported");
+    expect(timeline).toHaveLength(3);
+  });
+
+  it("never regresses the cursor when importing an older backup onto newer live-synced history", async () => {
+    const { db } = await createNodeLocalStore();
+    await insertIncomingEnvelope(db, envelope({ conversationId: "conv-imported", seq: 10 }));
+
+    await importTimelineEntries(db, [importConversation({ cursorSeq: 3 })]);
+
+    expect(await getConversationCursor(db, "conv-imported")).toBe(10);
+  });
+
+  it("advances the cursor forward when the imported history is newer than what's known", async () => {
+    const { db } = await createNodeLocalStore();
+    await insertIncomingEnvelope(db, envelope({ conversationId: "conv-imported", seq: 1 }));
+
+    await importTimelineEntries(db, [importConversation({ cursorSeq: 3 })]);
+
+    expect(await getConversationCursor(db, "conv-imported")).toBe(3);
+  });
+
+  it("does not touch the outbox table", async () => {
+    const { db } = await createNodeLocalStore();
+    await appendOutboxEntry(db, {
+      clientId: "client-1",
+      conversationId: "conv-imported",
+      contentType: "text/plain",
+      payload: "aGk=",
+      createdAt: new Date(),
+    });
+
+    await importTimelineEntries(db, [importConversation()]);
+
+    expect(await listOutboxEntries(db)).toHaveLength(1);
+  });
+});
+
+describe("listAllTimelineEntries", () => {
+  it("returns only message-kind entries, oldest-first, unpaginated", async () => {
+    const { db } = await createNodeLocalStore();
+    await insertIncomingEnvelope(db, envelope({ conversationId: "conv-1", seq: 1 })); // history_start + message
+    await insertIncomingEnvelope(db, envelope({ conversationId: "conv-1", seq: 5 })); // gap + message
+
+    const entries = await listAllTimelineEntries(db, "conv-1");
+
+    expect(entries.map((e) => e.kind)).toEqual(["message", "message"]);
+    expect(entries.map((e) => e.seq)).toEqual([1, 5]);
   });
 });
