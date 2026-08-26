@@ -432,4 +432,45 @@ Full pipeline (lint/typecheck/test/build) green per-package across all four touc
 
 Also still open: the presence/typing/read-receipt gap and the deferred custom-group-name schema
 change noted in Phase 5, revisit if either becomes worth prioritizing. Phase 6 (all parts) is now
-complete; next up is whatever phase the user wants to tackle next — see docs/ROADMAP.md.
+complete.
+
+## Next phase TODOs (user manual test pass, 2026-08-27)
+
+The user ran the full Phase 6 feature set live (per the walkthrough above) and reported six items,
+to be picked up in the next phase rather than this one:
+
+1. **Bug: a sent image attachment rendered as "Unsupported message" on the receiver's side and
+   couldn't be opened.** Not reproduced/root-caused yet — do that first, don't assume the cause
+   below. Checked at report time: `IMAGE_CONTENT_TYPES`/`ALLOWED_CONTENT_TYPES`/
+   `MEDIA_CONTENT_TYPES` are byte-identical across `apps/web/app/chat/[id]/page.tsx`,
+   `apps/web/lib/attachment-upload.ts`, and `apps/server/src/modules/media/media.service.ts` — no
+   allowlist mismatch. Leading hypothesis, unconfirmed: the `apps/web` dev server had been running
+   continuously for over a day across dozens of hot-reloads during this session (it already needed
+   two full restarts for stale-bundle symptoms — 404s on its own JS chunks — while verifying parts
+   2a and 2b), so the browser may have been served a pre-media-feature bundle. Rule this in or out
+   with a *fresh* `pnpm dev` restart and a hard browser reload before treating it as a real logic
+   bug in the image-detection path.
+2. **"Image not available" after backup export/import.** This is not a new bug — it's the exact,
+   already-documented behavior from `docs/ADR/0009-media-attachments.md`'s Consequences section:
+   `packages/backup` (ADR-0007) and device-linking (ADR-0008) don't carry `attachmentPayload`
+   through their transfer yet, only the text descriptor. Closing this means wiring
+   `attachmentPayload` through `packages/backup`'s serialize/chunker models — `local-store`'s
+   `ImportEntryInput` already accepts the field, so it's a `packages/backup` change, not another
+   schema change.
+3. **Sent-message ticks (single/double) and read receipts.** Extends the long-standing documented
+   gap (`docs/RETENTION.md` §2 already reserves Redis TTL rows for presence/typing; no relay event
+   for delivery/read receipts exists yet — `modules/relay/socket.ts` only has ack, which the UI
+   already shows as sent/delivered). User asked for a non-blue color for the "read" tick state to
+   avoid the exact WhatsApp look.
+4. **"Last seen" not shown** for the other person in a conversation. Same presence-infrastructure
+   gap as above (Redis TTL heartbeat rows are reserved but no presence relay event or REST exposure
+   was ever built) — likely worth doing together with read receipts since both need the same
+   presence plumbing.
+5. **Profile pictures**: `users.avatarUrl` already exists in `packages/db`'s schema (present since
+   Phase 2, never populated or surfaced) — needs an upload flow (likely reusing the R2
+   presigned-upload pattern from ADR-0009, a public or long-TTL-presigned read path since avatars
+   aren't retention-sensitive the way message content is) plus UI in Settings/profile and the
+   Inbox/Thread member displays.
+6. **General UI polish** — user's word was "dull." No specifics given; worth a dedicated design
+   pass against `docs/UI_DIRECTION.md`'s token/motion intent rather than guessing at specifics
+   blind — ask for concrete examples/references at the start of that work.
