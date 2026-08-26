@@ -59,7 +59,7 @@ docs/ADR/                           — 0001 stack, 0002 retention/storage, 0003
 listed in the master plan's repo layout — `ARCHITECTURE.md`, `SYNC_MODEL.md`, `SCALE.md`,
 `SECURITY.md`, `RUNBOOK.md`, `CASE_STUDY.md`, `BACKUP_FORMAT.md` — land in later phases.)
 
-## Repo layout (as of Phase 6, part 1)
+## Repo layout (as of Phase 6, part 2a)
 
 ```
 apps/server/           Fastify + Socket.IO. Auth/device/discovery/conversations/users/storage REST
@@ -81,10 +81,16 @@ packages/local-store/   On-device chat history — Drizzle SQLite schema/reposit
                         Tables: conversation_cursors (sync cursor only, not conversation metadata),
                         timeline_entries (messages + gap/history_start/dormancy_return markers,
                         local autoincrement id for pagination), outbox (offline send queue).
-                        Phase 6 added importTimelineEntries (bulk-writes historical data from a
-                        backup or a device-linking transfer, bypassing the live-sync seq-sequential
+                        Phase 6 part 1 added importTimelineEntries (bulk-writes historical data from
+                        a backup or a device-linking transfer, bypassing the live-sync seq-sequential
                         classifyAndAdvanceCursor path entirely — see docs/RETENTION.md's bulk-import
-                        note) and listAllTimelineEntries (full unpaginated history, for export).
+                        note) and listAllTimelineEntries (full unpaginated history, for export). Part
+                        2a added searchTimeline (client-side FTS5 full-text search, docs/ADR/0006's
+                        Phase 6 update) plus text-payload.ts (encode/decodeTextPayload, moved here
+                        from apps/web since indexing needs the decode half at insert time) — the new
+                        timeline_entries_fts virtual table is a hand-written migration (FTS5 isn't
+                        expressible via drizzle-kit's schema diffing), populated in application code
+                        since payload is base64 and no SQL trigger can decode it.
 packages/sync-engine/   Drives local-store from docs/REALTIME_PROTOCOL.md. createSyncEngine({socket,
                         store, selfUserId, selfDeviceId}) — depends on socket.io-client directly
                         (no custom transport abstraction). All inbound socket events + outbox
@@ -340,8 +346,37 @@ test timing out under the CPU contention of everything building/testing at once 
 already a known, previously-worked-around flake (see Phase 3's notes), reproduced again here but not
 caused by this phase's changes, confirmed by every package passing cleanly in isolation.
 
-Next: Phase 6, part 2 (media/attachments via R2, client-side FTS5 search) — the remainder of the
-original Phase 6 scope, deferred by explicit agreement before this pass started since it needs a new
-Cloudflare R2 account (user credentials) and is a large enough scope on its own. Also still open: the
-presence/typing/read-receipt gap and the deferred custom-group-name schema change noted in Phase 5,
-revisit if either becomes worth prioritizing.
+**Phase 6, part 2a (Client-side full-text search): complete on `main`.** Local FTS5 search over this
+device's own message history — entirely client-side, no server involvement at all
+(`docs/DESIGN_REVIEW.md`'s original "search becomes a local-store concern" call, now actually built).
+Two facts were verified empirically before committing to the design, not assumed: FTS5 works on both
+local-store backends (`node --experimental-sqlite` spike for `node:sqlite`; a headless-Chromium
+Playwright check against a minimal Vite page for `sqlocal`'s Wasm build), and `.returning()` on
+insert already works cleanly through `drizzle-orm/sqlite-proxy` (the existing `node.spike.test.ts`).
+A new `/search` page (global, not per-conversation, matching `docs/UI_DIRECTION.md`'s screen
+inventory naming), debounced, with FTS5 `snippet()`-highlighted results and search-as-you-type
+prefix matching.
+
+Security note worth recording: FTS5's `snippet()` output was initially going to use `<mark>`/`</mark>`
+as its highlight tags, rendered via `dangerouslySetInnerHTML` — caught before implementation that
+this would be a real XSS hole, since a message body is arbitrary user text that could itself contain
+literal HTML. Fixed by using unprintable control characters (SOH/STX) as the snippet delimiters
+instead and rendering the highlight as a real React `<mark>` element after a plain string split —
+never `dangerouslySetInnerHTML` on message content, full stop.
+
+One real bug found and fixed during verification, not caught until the full monorepo pipeline ran
+(isolated per-package runs all passed first): the search-indexing hook
+(`indexMessageForSearch`) let a base64 decode failure throw straight out of the same transaction as
+the actual message insert — `packages/sync-engine`'s own test fixtures use plain non-base64
+placeholder strings for `contentType: "text/plain"`, which crashed `insertIncomingEnvelope` entirely,
+not just search indexing. Fixed by catching the decode failure locally: a malformed payload just
+means that one message isn't searchable, never a failed insert — search must not be able to take
+down message delivery. A regression test now covers this. Full pipeline (lint/typecheck/test/build)
+green per-package; the one failure in a single combined `turbo run` was a `.next/types` race between
+the long-running dev server and the production build sharing the same output directory — confirmed
+by immediately re-running the same checks in isolation, not a code issue.
+
+Next: Phase 6, part 2b (media/attachments via Cloudflare R2) — the last piece of the original Phase
+6 scope, gated on the user setting up an R2 account/API token (click-by-click steps already given).
+Also still open: the presence/typing/read-receipt gap and the deferred custom-group-name schema
+change noted in Phase 5, revisit if either becomes worth prioritizing.

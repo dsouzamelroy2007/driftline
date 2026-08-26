@@ -1,6 +1,6 @@
 "use client";
 
-import { countMessagesAfter, listTimeline, type TimelineEntry } from "@driftline/local-store";
+import { countMessagesAfter, decodeTextPayload, listTimeline, type TimelineEntry } from "@driftline/local-store";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -11,7 +11,6 @@ import { useAuth } from "../../lib/auth-context";
 import { conversationDisplayName } from "../../lib/conversation-name";
 import { useLocalStore } from "../../lib/local-store-context";
 import { hasSeenOnboarding } from "../../lib/onboarding";
-import { decodeTextPayload } from "../../lib/payload";
 import { getLastReadId } from "../../lib/read-state";
 import { linkClass, primaryButtonClass } from "../../lib/ui-classes";
 import type { Conversation } from "../../lib/types";
@@ -117,6 +116,9 @@ function InboxContent() {
         <div className="flex gap-3 text-sm">
           <Link href="/settings" className={linkClass}>
             Settings
+          </Link>
+          <Link href="/search" className={linkClass}>
+            Search
           </Link>
           <Link href="/chat/new" className={linkClass}>
             New chat

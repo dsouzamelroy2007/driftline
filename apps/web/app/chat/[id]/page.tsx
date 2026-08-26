@@ -1,6 +1,13 @@
 "use client";
 
-import { listOutboxEntries, listTimeline, type OutboxEntry, type TimelineEntry } from "@driftline/local-store";
+import {
+  decodeTextPayload,
+  encodeTextPayload,
+  listOutboxEntries,
+  listTimeline,
+  type OutboxEntry,
+  type TimelineEntry,
+} from "@driftline/local-store";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -10,7 +17,6 @@ import { listConversations } from "../../../lib/api-client";
 import { useAuth } from "../../../lib/auth-context";
 import { conversationDisplayName } from "../../../lib/conversation-name";
 import { useLocalStore } from "../../../lib/local-store-context";
-import { decodeTextPayload, encodeTextPayload } from "../../../lib/payload";
 import { setLastReadId } from "../../../lib/read-state";
 import { useSyncEngine } from "../../../lib/sync-context";
 import { noticeCopyFor } from "../../../lib/timeline-copy";

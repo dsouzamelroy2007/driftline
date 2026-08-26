@@ -1,7 +1,8 @@
 // Envelope payloads are opaque base64 over the wire (docs/REALTIME_PROTOCOL.md) — the server never
-// parses them. Text messages are this client's only contentType for now ("text/plain"); encode/
-// decode UTF-8 safely rather than relying on btoa/atob's latin1-only behavior.
-
+// parses them. Text messages are the only contentType clients send for now ("text/plain"); encode/
+// decode UTF-8 safely rather than relying on btoa/atob's latin1-only behavior. Lives here (not just
+// in apps/web) because repository.ts's insert functions need the decode half to populate the
+// search index (see searchTimeline) — moved verbatim from apps/web/lib/payload.ts.
 export function encodeTextPayload(text: string): string {
   const bytes = new TextEncoder().encode(text);
   let binary = "";

@@ -80,6 +80,20 @@ pattern).
   not a Next.js-specific issue; `apps/web`'s Next.js bundler is expected to handle the Worker
   correctly out of the box, to be confirmed when Phase 5 actually mounts a page on this).
 
+## Update — Phase 6: FTS5 confirmed and implemented
+
+This ADR's "same FTS5 search path" reasoning (Decision, above) was a bet at the time it was written
+— chosen because SQLite generally supports FTS5, not because either backend had actually been
+checked. Phase 6 verified it directly before building client-side search on top of it: both
+`node:sqlite` (`node --experimental-sqlite`, a one-line spike) and `sqlocal`'s SQLite Wasm build (a
+headless-Chromium Playwright check against a minimal Vite page importing `sqlocal` directly, same
+harness style as the OPFS check above) successfully run `CREATE VIRTUAL TABLE ... USING fts5(...)`.
+`packages/local-store`'s `searchTimeline` (a hand-written raw-SQL migration for the virtual table —
+FTS5 virtual tables aren't expressible via `drizzle-kit generate`'s schema diffing, exactly as
+anticipated above — with application-code population at insert time, since payloads are base64 and
+no SQL trigger can decode them) is the result; see its own doc comments in `repository.ts` for the
+full design, not repeated here.
+
 ## Alternatives considered and rejected
 
 - **Dexie/IndexedDB**: rejected per the trade-off already named in `ADR-0001`'s deferred note — no

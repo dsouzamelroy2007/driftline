@@ -14,5 +14,11 @@ export const MIGRATIONS: LocalStoreMigration[] = [
       "CREATE UNIQUE INDEX `timeline_entries_envelope_id_unique` ON `timeline_entries` (`envelope_id`);",
       "CREATE INDEX `timeline_entries_conversation_id_idx` ON `timeline_entries` (`conversation_id`,`id`);"
     ]
+  },
+  {
+    "name": "0001_search_fts",
+    "statements": [
+      "CREATE VIRTUAL TABLE `timeline_entries_fts` USING fts5(`body`);"
+    ]
   }
 ];

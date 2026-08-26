@@ -13,9 +13,13 @@ import {
   listOutboxEntries,
   listTimeline,
   reconcileOutboxEntry,
+  searchTimeline,
+  SEARCH_SNIPPET_MARK_END,
+  SEARCH_SNIPPET_MARK_START,
   type ImportConversationInput,
   type IncomingEnvelope,
 } from "./repository.js";
+import { encodeTextPayload } from "./text-payload.js";
 
 function envelope(overrides: Partial<IncomingEnvelope> & { seq: number }): IncomingEnvelope {
   return {
@@ -262,5 +266,143 @@ describe("listAllTimelineEntries", () => {
 
     expect(entries.map((e) => e.kind)).toEqual(["message", "message"]);
     expect(entries.map((e) => e.seq)).toEqual([1, 5]);
+  });
+});
+
+describe("searchTimeline", () => {
+  it("finds a message by a single token, via insertIncomingEnvelope", async () => {
+    const { db } = await createNodeLocalStore();
+    await insertIncomingEnvelope(db, envelope({ seq: 1, payload: encodeTextPayload("the quick brown fox") }));
+
+    const results = await searchTimeline(db, "quick");
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.entry.seq).toBe(1);
+    expect(results[0]!.snippet).toContain(`${SEARCH_SNIPPET_MARK_START}quick${SEARCH_SNIPPET_MARK_END}`);
+  });
+
+  it("finds a message written via reconcileOutboxEntry (this device's own send)", async () => {
+    const { db } = await createNodeLocalStore();
+    await reconcileOutboxEntry(db, {
+      clientId: "client-1",
+      envelopeId: "env-server-1",
+      seq: 1,
+      conversationId: "conv-1",
+      senderId: "user-a",
+      senderDeviceId: "device-a",
+      contentType: "text/plain",
+      payload: encodeTextPayload("meet me at the docks tonight"),
+      createdAt: new Date(),
+    });
+
+    const results = await searchTimeline(db, "docks");
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.entry.envelopeId).toBe("env-server-1");
+  });
+
+  it("requires every token to match (implicit AND)", async () => {
+    const { db } = await createNodeLocalStore();
+    await insertIncomingEnvelope(db, envelope({ seq: 1, payload: encodeTextPayload("the quick brown fox") }));
+    await insertIncomingEnvelope(db, envelope({ seq: 2, payload: encodeTextPayload("a slow brown turtle") }));
+
+    const results = await searchTimeline(db, "quick brown");
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.entry.seq).toBe(1);
+  });
+
+  it("prefix-matches the last token (search-as-you-type)", async () => {
+    const { db } = await createNodeLocalStore();
+    await insertIncomingEnvelope(db, envelope({ seq: 1, payload: encodeTextPayload("the quick brown fox") }));
+
+    const results = await searchTimeline(db, "qui");
+
+    expect(results).toHaveLength(1);
+  });
+
+  it("never indexes gap/history_start/dormancy_return markers", async () => {
+    const { db } = await createNodeLocalStore();
+    // seq 5 with no prior cursor produces a history_start marker alongside the message.
+    await insertIncomingEnvelope(db, envelope({ seq: 5, payload: encodeTextPayload("history starts here today") }));
+
+    const results = await searchTimeline(db, "history");
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.entry.kind).toBe("message");
+  });
+
+  it("does not index non-text content types", async () => {
+    const { db } = await createNodeLocalStore();
+    await insertIncomingEnvelope(db, envelope({ seq: 1, contentType: "application/octet-stream", payload: "aGVsbG8=" }));
+
+    const results = await searchTimeline(db, "hello");
+
+    expect(results).toHaveLength(0);
+  });
+
+  it("a non-base64 payload on a text/plain message never crashes the insert (just isn't indexed)", async () => {
+    const { db } = await createNodeLocalStore();
+
+    // Regression: indexMessageForSearch used to let atob() throw straight out of the same
+    // transaction as the message insert, so a malformed payload (packages/sync-engine's own test
+    // fixtures use plain non-base64 placeholder strings for contentType "text/plain") took down
+    // message delivery itself, not just search.
+    await expect(insertIncomingEnvelope(db, envelope({ seq: 1, payload: "not-valid-base64!!!" }))).resolves.toMatchObject({
+      classification: "history_start",
+    });
+
+    const timeline = await listTimeline(db, "conv-1");
+    expect(timeline.map((e) => e.kind)).toContain("message");
+    expect(await searchTimeline(db, "anything")).toEqual([]);
+  });
+
+  it("does not double-index a duplicate re-import", async () => {
+    const { db } = await createNodeLocalStore();
+    const conversation: ImportConversationInput = {
+      conversationId: "conv-imported",
+      cursorSeq: 1,
+      entries: [
+        {
+          envelopeId: "env-import-1",
+          senderId: "user-b",
+          senderDeviceId: "device-b",
+          seq: 1,
+          contentType: "text/plain",
+          payload: encodeTextPayload("a message worth finding twice"),
+          createdAt: new Date(),
+        },
+      ],
+    };
+
+    await importTimelineEntries(db, [conversation]);
+    await importTimelineEntries(db, [conversation]); // re-import: dedup via envelopeId, must not throw or duplicate
+
+    const results = await searchTimeline(db, "finding");
+
+    expect(results).toHaveLength(1);
+  });
+
+  it("returns no results for an unknown term, without throwing", async () => {
+    const { db } = await createNodeLocalStore();
+    await insertIncomingEnvelope(db, envelope({ seq: 1, payload: encodeTextPayload("the quick brown fox") }));
+
+    expect(await searchTimeline(db, "elephant")).toEqual([]);
+  });
+
+  it("treats FTS5 special characters in the query as literal text, not syntax", async () => {
+    const { db } = await createNodeLocalStore();
+    await insertIncomingEnvelope(db, envelope({ seq: 1, payload: encodeTextPayload("call me at 555-1234 or don't") }));
+
+    // A raw FTS5 query would choke on unbalanced quotes / treat "-" as a NOT operator — this must
+    // not throw, and (being sanitized into literal quoted tokens) simply won't match here.
+    await expect(searchTimeline(db, '"unbalanced')).resolves.toEqual([]);
+  });
+
+  it("returns an empty array for a blank query", async () => {
+    const { db } = await createNodeLocalStore();
+    await insertIncomingEnvelope(db, envelope({ seq: 1, payload: encodeTextPayload("the quick brown fox") }));
+
+    expect(await searchTimeline(db, "   ")).toEqual([]);
   });
 });

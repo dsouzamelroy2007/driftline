@@ -1,7 +1,30 @@
-import { and, asc, desc, eq, gt, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, sql } from "drizzle-orm";
 
 import { conversationCursors, outbox, timelineEntries, type OutboxEntry, type OutboxStatus, type TimelineEntry } from "./schema.js";
+import { decodeTextPayload } from "./text-payload.js";
 import type { LocalStoreDb, LocalStoreTx } from "./types.js";
+
+// Only "text/plain" is ever indexed for search (searchTimeline below) — payload is base64, and
+// vanilla SQLite has no base64 decoder, so a SQL trigger can't populate the FTS index; this has to
+// run in application code at every insert call site instead. Other content types (once they exist)
+// would index a caption/filename, not decoded bytes — not this function's concern.
+//
+// Never let a decode failure propagate out of this function: it always runs inside the same
+// transaction as the actual message insert, and search indexing is a nice-to-have that must not be
+// able to take down message delivery itself. A malformed/non-base64 payload (caught live: a
+// packages/sync-engine test fixture uses plain placeholder strings, not real base64, for
+// contentType "text/plain") just means that one message doesn't end up searchable — not a crashed
+// insert.
+async function indexMessageForSearch(tx: LocalStoreTx, entry: { id: number; contentType: string; payload: string }): Promise<void> {
+  if (entry.contentType !== "text/plain") return;
+  let body: string;
+  try {
+    body = decodeTextPayload(entry.payload);
+  } catch {
+    return;
+  }
+  await tx.run(sql`INSERT INTO timeline_entries_fts (rowid, body) VALUES (${entry.id}, ${body})`);
+}
 
 export type IncomingClassification = "duplicate" | "history_start" | "gap" | "ok";
 
@@ -103,17 +126,22 @@ export async function insertIncomingEnvelope(db: LocalStoreDb, envelope: Incomin
       return { classification };
     }
 
-    await tx.insert(timelineEntries).values({
-      conversationId: envelope.conversationId,
-      kind: "message",
-      envelopeId: envelope.envelopeId,
-      senderId: envelope.senderId,
-      senderDeviceId: envelope.senderDeviceId,
-      seq: envelope.seq,
-      contentType: envelope.contentType,
-      payload: envelope.payload,
-      createdAt: envelope.createdAt,
-    });
+    const [inserted] = await tx
+      .insert(timelineEntries)
+      .values({
+        conversationId: envelope.conversationId,
+        kind: "message",
+        envelopeId: envelope.envelopeId,
+        senderId: envelope.senderId,
+        senderDeviceId: envelope.senderDeviceId,
+        seq: envelope.seq,
+        contentType: envelope.contentType,
+        payload: envelope.payload,
+        createdAt: envelope.createdAt,
+      })
+      .returning({ id: timelineEntries.id });
+
+    await indexMessageForSearch(tx, { id: inserted!.id, contentType: envelope.contentType, payload: envelope.payload });
 
     return { classification };
   });
@@ -226,7 +254,7 @@ export async function importTimelineEntries(
   await db.transaction(async (tx) => {
     for (const conversation of conversations) {
       for (const entry of conversation.entries) {
-        await tx
+        const [inserted] = await tx
           .insert(timelineEntries)
           .values({
             conversationId: conversation.conversationId,
@@ -239,7 +267,14 @@ export async function importTimelineEntries(
             payload: entry.payload,
             createdAt: entry.createdAt,
           })
-          .onConflictDoNothing({ target: timelineEntries.envelopeId });
+          .onConflictDoNothing({ target: timelineEntries.envelopeId })
+          .returning({ id: timelineEntries.id });
+
+        // onConflictDoNothing means a dedup-skipped entry (re-importing the same backup) returns
+        // no row — only index entries that were actually newly written.
+        if (inserted) {
+          await indexMessageForSearch(tx, { id: inserted.id, contentType: entry.contentType, payload: entry.payload });
+        }
         entriesImported += 1;
       }
 
@@ -323,16 +358,89 @@ export async function reconcileOutboxEntry(db: LocalStoreDb, input: ReconcileOut
       createdAt: input.createdAt,
     });
 
-    await tx.insert(timelineEntries).values({
-      conversationId: input.conversationId,
-      kind: "message",
-      envelopeId: input.envelopeId,
-      senderId: input.senderId,
-      senderDeviceId: input.senderDeviceId,
-      seq: input.seq,
-      contentType: input.contentType,
-      payload: input.payload,
-      createdAt: input.createdAt,
-    });
+    const [inserted] = await tx
+      .insert(timelineEntries)
+      .values({
+        conversationId: input.conversationId,
+        kind: "message",
+        envelopeId: input.envelopeId,
+        senderId: input.senderId,
+        senderDeviceId: input.senderDeviceId,
+        seq: input.seq,
+        contentType: input.contentType,
+        payload: input.payload,
+        createdAt: input.createdAt,
+      })
+      .returning({ id: timelineEntries.id });
+
+    await indexMessageForSearch(tx, { id: inserted!.id, contentType: input.contentType, payload: input.payload });
   });
+}
+
+export interface SearchResult {
+  entry: TimelineEntry;
+  snippet: string;
+}
+
+const FTS_SNIPPET_COLUMN_INDEX = 0; // timeline_entries_fts has a single column, `body`.
+const DEFAULT_SEARCH_LIMIT = 30;
+
+// snippet()'s start/end markers for the matched term, deliberately unprintable control characters
+// rather than HTML tags like <mark>: a message body is arbitrary user text that could itself
+// contain the literal string "<mark>" — a renderer using dangerouslySetInnerHTML on that would be
+// a real XSS hole, and even a safe split-based renderer would misparse a body that happens to
+// contain the literal delimiter text. SOH/STX (0x01/0x02) essentially never appear in normal chat
+// text and carry no HTML meaning either way. Exported as character codes, not the literal
+// characters, to avoid an invisible-character footgun in this source file.
+export const SEARCH_SNIPPET_MARK_START = String.fromCharCode(1);
+export const SEARCH_SNIPPET_MARK_END = String.fromCharCode(2);
+
+// Wraps user input as an AND-of-quoted-tokens FTS5 query, with a trailing prefix match on the last
+// token (search-as-you-type) — never interpolates raw text into a MATCH expression, since FTS5's
+// query syntax has its own operators (AND/OR/NOT/*/-/quotes) a message body could accidentally or
+// deliberately trigger.
+function sanitizeFtsQuery(query: string): string {
+  const tokens = query.trim().split(/\s+/).filter(Boolean);
+  return tokens.map((token, i) => `"${token.replace(/"/g, '""')}"${i === tokens.length - 1 ? "*" : ""}`).join(" ");
+}
+
+export interface SearchTimelineOptions {
+  limit?: number;
+}
+
+// Client-side full-text search over this device's own message history — the server never has this
+// data at rest, so there's no server-side equivalent (docs/DESIGN_REVIEW.md). Only "message" kind
+// entries with contentType "text/plain" are ever indexed (indexMessageForSearch above); markers and
+// other content types never appear in results.
+export async function searchTimeline(db: LocalStoreDb, query: string, options: SearchTimelineOptions = {}): Promise<SearchResult[]> {
+  const ftsQuery = sanitizeFtsQuery(query);
+  if (!ftsQuery) return [];
+
+  const limit = options.limit ?? DEFAULT_SEARCH_LIMIT;
+
+  // Raw sql`` queries return positional arrays, not keyed objects, through drizzle-orm/sqlite-proxy
+  // (see migrate.ts's comment for the exact same gotcha) — index by position, not by name.
+  const matches = await db.all<[number, string]>(sql`
+    SELECT rowid, snippet(timeline_entries_fts, ${FTS_SNIPPET_COLUMN_INDEX}, ${SEARCH_SNIPPET_MARK_START}, ${SEARCH_SNIPPET_MARK_END}, '…', 8)
+    FROM timeline_entries_fts
+    WHERE timeline_entries_fts MATCH ${ftsQuery}
+    ORDER BY rank
+    LIMIT ${limit}
+  `);
+  if (matches.length === 0) return [];
+
+  const snippetsById = new Map(matches.map(([id, snippet]) => [id, snippet]));
+  const matchedIds = matches.map(([id]) => id);
+
+  const entries = await db.select().from(timelineEntries).where(inArray(timelineEntries.id, matchedIds));
+  const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
+
+  // Re-sort into the FTS relevance order — the .select() above doesn't preserve it.
+  return matchedIds
+    .map((id) => {
+      const entry = entriesById.get(id);
+      const snippet = snippetsById.get(id);
+      return entry && snippet !== undefined ? { entry, snippet } : null;
+    })
+    .filter((result): result is SearchResult => result !== null);
 }
