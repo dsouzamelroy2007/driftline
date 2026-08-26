@@ -73,6 +73,9 @@ export async function sendOutboxEntry(store: LocalStoreDb, sender: OutboxSender,
     senderDeviceId: sender.selfDeviceId,
     contentType: entry.contentType,
     payload: entry.payload,
+    // The sender's own file bytes, already available locally at compose time — no reason to
+    // round-trip through upload+download of its own send (docs/ADR/0009-media-attachments.md).
+    attachmentPayload: entry.attachmentPayload ?? undefined,
     createdAt: new Date(),
   });
 }

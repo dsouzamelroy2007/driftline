@@ -141,4 +141,56 @@ describe("createSyncEngine", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.status).toBe("failed");
   });
+
+  describe("media attachments (docs/ADR/0009-media-attachments.md)", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("downloads the attachment before inserting or acking, then stores it locally", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new TextEncoder().encode("fake-image-bytes").buffer),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const envelope = {
+        ...wireEnvelope({ seq: 1 }),
+        contentType: "image/jpeg",
+        payload: btoa(JSON.stringify({ r2Key: "attachments/user-b/abc", size: 123 })),
+        attachmentDownloadUrl: "https://example.com/presigned",
+      };
+      socket.triggerEnvelopeDeliver(envelope);
+
+      await vi.waitFor(() => expect(socket.outgoingEvents).toContainEqual({ event: "envelope:ack", args: [{ envelopeId: envelope.id }] }));
+
+      const timeline = await listTimeline(store.db, "conv-1");
+      const message = timeline.find((e) => e.kind === "message");
+      expect(message?.attachmentPayload).toBe(btoa("fake-image-bytes"));
+    });
+
+    it("never inserts or acks when the attachment download fails after every retry", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockRejectedValue(new Error("still down")),
+      );
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+      const envelope = {
+        ...wireEnvelope({ seq: 1 }),
+        contentType: "image/jpeg",
+        payload: btoa(JSON.stringify({ r2Key: "attachments/user-b/abc", size: 123 })),
+        attachmentDownloadUrl: "https://example.com/presigned",
+      };
+      socket.triggerEnvelopeDeliver(envelope);
+
+      // The retries take a moment (backoff) — wait for the fetch mock to have been exhausted
+      // rather than asserting instantly.
+      await vi.waitFor(() => expect(consoleSpy).toHaveBeenCalled(), { timeout: 5000 });
+
+      expect(socket.outgoingEvents.find((e) => e.event === "envelope:ack")).toBeUndefined();
+      expect(await listTimeline(store.db, "conv-1")).toHaveLength(0);
+      consoleSpy.mockRestore();
+    });
+  });
 });

@@ -14,9 +14,16 @@ import {
 import { eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import type { S3Client } from "@aws-sdk/client-s3";
+
 import { revokeDevice } from "../devices/devices.service.js";
 import { ackEnvelope, sendEnvelope } from "./envelopes.service.js";
 import { sweepExpiredEnvelopes } from "./sweeper.js";
+
+// None of these tests send media envelopes, so cleanupPurgedMedia (called post-commit by
+// ackEnvelope/revokeDevice/sweepExpiredEnvelopes) always no-ops before touching this client —
+// it exists only to satisfy the type signature.
+const fakeR2 = { client: {} as S3Client, bucket: "test-bucket" };
 
 // This suite is docs/ROADMAP.md's Phase 3 exit gate: proof, against a real Postgres (not a mock),
 // that zero message bodies survive once every recipient device has acked, and that the 30-day
@@ -90,7 +97,7 @@ describe("retention: ack-triggered purge", () => {
     expect(targetDeviceIds).toEqual([recipient.device.id]);
     expect(await envelopeExists(envelope.id)).toBe(true);
 
-    const result = await ackEnvelope(db, { envelopeId: envelope.id, deviceId: recipient.device.id });
+    const result = await ackEnvelope(db, { envelopeId: envelope.id, deviceId: recipient.device.id }, fakeR2);
 
     expect(result.purged).toBe(true);
     expect(await envelopeExists(envelope.id)).toBe(false);
@@ -113,11 +120,11 @@ describe("retention: ack-triggered purge", () => {
     });
     expect([...targetDeviceIds].sort()).toEqual([memberB.device.id, memberC.device.id].sort());
 
-    const firstAck = await ackEnvelope(db, { envelopeId: envelope.id, deviceId: memberB.device.id });
+    const firstAck = await ackEnvelope(db, { envelopeId: envelope.id, deviceId: memberB.device.id }, fakeR2);
     expect(firstAck.purged).toBe(false);
     expect(await envelopeExists(envelope.id)).toBe(true);
 
-    const secondAck = await ackEnvelope(db, { envelopeId: envelope.id, deviceId: memberC.device.id });
+    const secondAck = await ackEnvelope(db, { envelopeId: envelope.id, deviceId: memberC.device.id }, fakeR2);
     expect(secondAck.purged).toBe(true);
     expect(await envelopeExists(envelope.id)).toBe(false);
     expect(await targetCount(envelope.id)).toBe(0);
@@ -139,8 +146,8 @@ describe("retention: ack-triggered purge", () => {
     });
 
     const [resultB, resultC] = await Promise.all([
-      ackEnvelope(db, { envelopeId: envelope.id, deviceId: memberB.device.id }),
-      ackEnvelope(db, { envelopeId: envelope.id, deviceId: memberC.device.id }),
+      ackEnvelope(db, { envelopeId: envelope.id, deviceId: memberB.device.id }, fakeR2),
+      ackEnvelope(db, { envelopeId: envelope.id, deviceId: memberC.device.id }, fakeR2),
     ]);
 
     const purgedCount = [resultB, resultC].filter((result) => result.purged).length;
@@ -168,7 +175,7 @@ describe("retention: expiry sweep", () => {
     // Simulates the 30-day window elapsing without the recipient ever acking.
     await db.update(envelopes).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(envelopes.id, envelope.id));
 
-    const result = await sweepExpiredEnvelopes(db);
+    const result = await sweepExpiredEnvelopes(db, fakeR2);
 
     expect(result.purgedCount).toBeGreaterThanOrEqual(1);
     expect(await envelopeExists(envelope.id)).toBe(false);
@@ -192,7 +199,7 @@ describe("retention: device revocation", () => {
     });
     expect(await envelopeExists(envelope.id)).toBe(true);
 
-    const revoked = await revokeDevice(db, recipient.device.id, recipient.user.id);
+    const revoked = await revokeDevice(db, recipient.device.id, recipient.user.id, fakeR2);
 
     expect(revoked).toBe(true);
     expect(await envelopeExists(envelope.id)).toBe(false);

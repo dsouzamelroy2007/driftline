@@ -39,6 +39,14 @@ The dividing line is exact: **routing and identity metadata is durable; content 
 field could be used to reconstruct what was said, it lives in the transient half of this table, full
 stop.
 
+**Media attachments (Phase 6, `docs/ADR/0009-media-attachments.md`) follow this exact same lifecycle,
+not a separate one.** An attachment's R2 object and its envelope are deleted together: the envelope
+row itself only ever stores a small `{ r2Key, size }` descriptor (still opaque bytes, still never
+parsed server-side), and every purge path — ack-triggered, expiry sweeper, and device revocation —
+deletes the corresponding R2 object immediately after (never before, and never blocking) the same
+Postgres transaction that deletes the envelope. There is no separate "attachment retention window";
+it is the envelope's window.
+
 ## 3. Entity lifecycle: `Envelope`
 
 ```mermaid
@@ -153,6 +161,14 @@ importing into a non-empty conversation).
       immediately, does not wait for the sweeper. Built in `devices.service.ts`'s `revokeDevice`,
       reusing the same lock-count-and-maybe-delete helper as the ack path for any envelope that
       loses its last pending target this way.
+- [x] **R2 attachment cleanup** (Phase 6, `docs/ADR/0009-media-attachments.md`): all three paths
+      above additionally delete a purged envelope's R2 object, if it has one, via
+      `modules/media/media.service.ts`'s `cleanupPurgedMedia` — called only *after* the Postgres
+      transaction has committed (R2 is a network call, can't be transactional with Postgres, and
+      must never block or roll back the actual retention guarantee). A known, documented exception:
+      an object whose upload succeeded but whose `message:send` never happened has no envelope to
+      ever trigger this — an accepted orphan-object risk, not a scheduled sweep target (see the
+      ADR's Consequences).
 - [ ] **Monitoring** (formalized in Phase 8, flagged here because it's a retention invariant): alert
       if the oldest *pending* envelope's age exceeds `RETENTION_WINDOW_DAYS` — that means the sweeper
       itself is broken and data is being retained silently past the contract.

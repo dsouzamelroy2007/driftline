@@ -33,6 +33,11 @@ export const timelineEntries = sqliteTable(
     seq: integer("seq"),
     contentType: text("content_type"),
     payload: text("payload"),
+    // Only set for media messages (docs/ADR/0009-media-attachments.md): the downloaded base64 image
+    // bytes, cached locally so the attachment survives after the server purges its R2 object.
+    // Deliberately a separate column from `payload`, which stays exactly what was received/sent
+    // over the wire (the small { r2Key, size } descriptor) — this is a local-only cache on top of it.
+    attachmentPayload: text("attachment_payload"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     // Only set on kind: "gap" — the range of sequence numbers that were purged before this device
     // could fetch them (docs/RETENTION.md §6 point 1).
@@ -55,6 +60,10 @@ export const outbox = sqliteTable("outbox", {
   conversationId: text("conversation_id").notNull(),
   contentType: text("content_type").notNull(),
   payload: text("payload").notNull(),
+  // For an outgoing media message, the sender's own file bytes — already available locally at
+  // compose time, so the optimistic bubble renders without round-tripping through upload+download
+  // of its own send (docs/ADR/0009-media-attachments.md).
+  attachmentPayload: text("attachment_payload"),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   status: text("status", { enum: outboxStatuses }).notNull().default("pending"),
 });

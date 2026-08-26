@@ -19,6 +19,9 @@ export interface WireEnvelope {
   contentType: string;
   payload: string;
   createdAt: string;
+  // Present only for media messages (docs/ADR/0009-media-attachments.md) — a presigned R2 GET URL,
+  // minted fresh by the server at delivery time (both live delivery and reconnect drain), short-TTL.
+  attachmentDownloadUrl?: string;
 }
 
 export type MessageSendAck =

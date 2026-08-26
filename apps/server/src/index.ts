@@ -9,6 +9,7 @@ import { Server as SocketIOServer } from "socket.io";
 import { env } from "./env.js";
 import { createEmailClient } from "./lib/email.js";
 import { HttpError } from "./lib/errors.js";
+import { createR2Client } from "./lib/r2-client.js";
 import { createRedisClient } from "./lib/redis.js";
 import authRoutes from "./modules/auth/auth.routes.js";
 import magicLinkRoutes from "./modules/auth/magic-link.routes.js";
@@ -17,6 +18,7 @@ import deviceLinkRoutes from "./modules/devices/device-link.routes.js";
 import devicesRoutes from "./modules/devices/devices.routes.js";
 import discoveryRoutes from "./modules/discovery/discovery.routes.js";
 import { startDiscoveryHeartbeat } from "./modules/discovery/discovery.service.js";
+import mediaRoutes from "./modules/media/media.routes.js";
 import conversationsRoutes from "./modules/relay/conversations.routes.js";
 import { sweepDormantDevices } from "./modules/relay/dormancy.js";
 import { registerSocketHandlers } from "./modules/relay/socket.js";
@@ -31,6 +33,7 @@ const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 const db = createDbClient(env.DATABASE_URL);
 const redis = createRedisClient(env.REDIS_URL);
 const email = createEmailClient(env.RESEND_API_KEY);
+const r2 = { client: createR2Client(env), bucket: env.R2_BUCKET_NAME };
 
 const app = Fastify({ logger: true });
 
@@ -47,7 +50,7 @@ app.setErrorHandler((error: FastifyError, request, reply) => {
   reply.code(statusCode).send({ error: error.message });
 });
 
-await app.register(appContext, { db, redis, email, env });
+await app.register(appContext, { db, redis, email, env, r2 });
 await app.register(cors, { origin: env.WEB_ORIGIN });
 await app.register(rateLimit, { global: false, redis });
 await app.register(authPlugin);
@@ -62,6 +65,7 @@ await app.register(deviceLinkRoutes);
 await app.register(discoveryRoutes);
 await app.register(conversationsRoutes);
 await app.register(storageRoutes);
+await app.register(mediaRoutes);
 
 await app.listen({ port: env.PORT, host: "0.0.0.0" });
 
@@ -69,7 +73,7 @@ const io = new SocketIOServer(app.server, {
   cors: { origin: env.WEB_ORIGIN },
 });
 
-registerSocketHandlers(io, { db, env, redis });
+registerSocketHandlers(io, { db, env, redis, r2 });
 
 startDiscoveryHeartbeat(redis, randomUUID(), env.DISCOVERY_HOST);
 
@@ -79,7 +83,7 @@ let sweepRunning = false;
 setInterval(() => {
   if (sweepRunning) return;
   sweepRunning = true;
-  void Promise.all([sweepExpiredEnvelopes(db), sweepDormantDevices(db, env.DEVICE_DORMANCY_DAYS)])
+  void Promise.all([sweepExpiredEnvelopes(db, r2), sweepDormantDevices(db, env.DEVICE_DORMANCY_DAYS)])
     .then(([envelopeResult, dormantCount]) => {
       if (envelopeResult.purgedCount > 0 || dormantCount > 0) {
         app.log.info(

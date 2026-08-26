@@ -406,3 +406,85 @@ describe("searchTimeline", () => {
     expect(await searchTimeline(db, "   ")).toEqual([]);
   });
 });
+
+describe("attachmentPayload (docs/ADR/0009-media-attachments.md)", () => {
+  const descriptor = JSON.stringify({ r2Key: "attachments/user-1/abc", size: 1234 });
+  const descriptorPayload = Buffer.from(descriptor).toString("base64");
+  const fakeImageBytes = "ZmFrZS1pbWFnZS1ieXRlcw==";
+
+  it("round-trips through insertIncomingEnvelope", async () => {
+    const { db } = await createNodeLocalStore();
+
+    await insertIncomingEnvelope(
+      db,
+      envelope({ seq: 1, contentType: "image/jpeg", payload: descriptorPayload, attachmentPayload: fakeImageBytes }),
+    );
+
+    const [entry] = await listTimeline(db, "conv-1");
+    expect(entry).toMatchObject({ contentType: "image/jpeg", payload: descriptorPayload, attachmentPayload: fakeImageBytes });
+  });
+
+  it("round-trips through reconcileOutboxEntry (this device's own media send)", async () => {
+    const { db } = await createNodeLocalStore();
+
+    await reconcileOutboxEntry(db, {
+      clientId: "client-1",
+      envelopeId: "env-server-1",
+      seq: 1,
+      conversationId: "conv-1",
+      senderId: "user-a",
+      senderDeviceId: "device-a",
+      contentType: "image/jpeg",
+      payload: descriptorPayload,
+      attachmentPayload: fakeImageBytes,
+      createdAt: new Date(),
+    });
+
+    const [entry] = await listTimeline(db, "conv-1");
+    expect(entry).toMatchObject({ attachmentPayload: fakeImageBytes });
+  });
+
+  it("round-trips through importTimelineEntries", async () => {
+    const { db } = await createNodeLocalStore();
+
+    await importTimelineEntries(db, [
+      {
+        conversationId: "conv-imported",
+        cursorSeq: 1,
+        entries: [
+          {
+            envelopeId: "env-import-1",
+            senderId: "user-b",
+            senderDeviceId: "device-b",
+            seq: 1,
+            contentType: "image/jpeg",
+            payload: descriptorPayload,
+            attachmentPayload: fakeImageBytes,
+            createdAt: new Date(),
+          },
+        ],
+      },
+    ]);
+
+    const entries = await listAllTimelineEntries(db, "conv-imported");
+    expect(entries[0]).toMatchObject({ attachmentPayload: fakeImageBytes });
+  });
+
+  it("is null when not provided (a text message, or a media message whose download hasn't happened)", async () => {
+    const { db } = await createNodeLocalStore();
+    await insertIncomingEnvelope(db, envelope({ seq: 1 }));
+
+    const [entry] = await listTimeline(db, "conv-1");
+    expect(entry?.attachmentPayload).toBeNull();
+  });
+
+  it("a media message's descriptor payload is never indexed for search (not text/plain)", async () => {
+    const { db } = await createNodeLocalStore();
+    await insertIncomingEnvelope(
+      db,
+      envelope({ seq: 1, contentType: "image/jpeg", payload: descriptorPayload, attachmentPayload: fakeImageBytes }),
+    );
+
+    expect(await searchTimeline(db, "attachments")).toEqual([]);
+  });
+});

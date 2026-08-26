@@ -20,5 +20,12 @@ export const MIGRATIONS: LocalStoreMigration[] = [
     "statements": [
       "CREATE VIRTUAL TABLE `timeline_entries_fts` USING fts5(`body`);"
     ]
+  },
+  {
+    "name": "0002_lowly_edwin_jarvis",
+    "statements": [
+      "ALTER TABLE `outbox` ADD `attachment_payload` text;",
+      "ALTER TABLE `timeline_entries` ADD `attachment_payload` text;"
+    ]
   }
 ];

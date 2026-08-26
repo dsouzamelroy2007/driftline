@@ -15,3 +15,22 @@ export function logEnvelopePurged(reason: "ack" | "expiry", envelopeId: string, 
     }),
   );
 }
+
+// docs/ADR/0009-media-attachments.md: R2 cleanup runs after the Postgres purge has already
+// committed — its own success/failure is logged separately from envelope_purged_total rather than
+// folded into it, since a failure here doesn't mean the retention guarantee itself failed (the
+// Postgres row is already gone by the time this runs).
+export function logMediaObjectPurged(r2Key: string): void {
+  console.log(JSON.stringify({ metric: "media_object_purged_total", r2Key, ts: new Date().toISOString() }));
+}
+
+export function logMediaCleanupFailed(r2Key: string, error: unknown): void {
+  console.error(
+    JSON.stringify({
+      metric: "media_cleanup_failed_total",
+      r2Key,
+      error: error instanceof Error ? error.message : String(error),
+      ts: new Date().toISOString(),
+    }),
+  );
+}

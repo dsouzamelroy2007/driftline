@@ -4,6 +4,12 @@ import { and, count, eq, sql } from "drizzle-orm";
 export interface PurgeResult {
   purged: boolean;
   size?: number;
+  // Only present when purged — carried out so the caller can run cleanupPurgedMedia (modules/media/
+  // media.service.ts) *after* its own transaction commits (docs/ADR/0009-media-attachments.md: R2
+  // cleanup can't be transactional with Postgres and must never block or roll back the actual
+  // retention guarantee).
+  contentType?: string;
+  payload?: string;
 }
 
 /**
@@ -37,6 +43,9 @@ export async function purgeEnvelopeIfComplete(tx: Tx, envelopeId: string): Promi
 
   // FK cascade (envelope_targets.envelope_id -> envelopes.id ON DELETE CASCADE) removes every
   // target row for this envelope in the same statement — docs/RETENTION.md §3/§4.
-  const [deleted] = await tx.delete(envelopes).where(eq(envelopes.id, envelopeId)).returning({ size: envelopes.size });
-  return { purged: true, size: deleted?.size };
+  const [deleted] = await tx
+    .delete(envelopes)
+    .where(eq(envelopes.id, envelopeId))
+    .returning({ size: envelopes.size, contentType: envelopes.contentType, payload: envelopes.payload });
+  return { purged: true, size: deleted?.size, contentType: deleted?.contentType, payload: deleted?.payload };
 }

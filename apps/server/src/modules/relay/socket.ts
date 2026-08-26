@@ -1,9 +1,11 @@
+import type { S3Client } from "@aws-sdk/client-s3";
 import { devices, type Db, type Envelope } from "@driftline/db";
 import { eq } from "drizzle-orm";
 import type { Redis } from "ioredis";
 import type { Server, Socket } from "socket.io";
 
 import type { env as Env } from "../../env.js";
+import { createDownloadUrl } from "../../lib/r2-client.js";
 import { resolvePrincipal } from "../../lib/principal.js";
 import { verifyAccessToken } from "../../lib/tokens.js";
 import { isConversationMember } from "./conversations.service.js";
@@ -17,6 +19,7 @@ import {
   deviceLinkJoinSchema,
   deviceLinkSignalSchema,
 } from "../devices/device-link.schemas.js";
+import { tryExtractR2Key } from "../media/media.service.js";
 import { ackEnvelope, drainPendingTargets, sendEnvelope } from "./envelopes.service.js";
 import { envelopeAckSchema, messageSendSchema } from "./socket.schemas.js";
 
@@ -25,10 +28,16 @@ interface SocketData {
   deviceId: string;
 }
 
+interface R2Context {
+  client: S3Client;
+  bucket: string;
+}
+
 export interface RegisterSocketHandlersOptions {
   db: Db;
   env: typeof Env;
   redis: Redis;
+  r2: R2Context;
 }
 
 function deviceRoom(deviceId: string): string {
@@ -43,13 +52,13 @@ function deviceRoom(deviceId: string): string {
 const MAX_JOIN_ATTEMPTS_PER_SOCKET = 5;
 
 // docs/REALTIME_PROTOCOL.md documents every event this registers.
-export function registerSocketHandlers(io: Server, { db, env, redis }: RegisterSocketHandlersOptions): void {
+export function registerSocketHandlers(io: Server, { db, env, redis, r2 }: RegisterSocketHandlersOptions): void {
   io.use((socket, next) => {
     void authenticateSocket(db, env, socket, next);
   });
 
   io.on("connection", (socket) => {
-    void handleConnection(io, db, env, redis, socket);
+    void handleConnection(io, db, env, redis, r2, socket);
   });
 }
 
@@ -81,7 +90,7 @@ async function authenticateSocket(
   }
 }
 
-async function handleConnection(io: Server, db: Db, env: typeof Env, redis: Redis, socket: Socket): Promise<void> {
+async function handleConnection(io: Server, db: Db, env: typeof Env, redis: Redis, r2: R2Context, socket: Socket): Promise<void> {
   const { deviceId } = socket.data as SocketData;
 
   await socket.join(deviceRoom(deviceId));
@@ -96,17 +105,19 @@ async function handleConnection(io: Server, db: Db, env: typeof Env, redis: Redi
     socket.emit("dormancy:return");
   }
 
+  // A device that reconnects days later gets a *freshly minted* download URL here, never a stale
+  // one from send time (docs/ADR/0009-media-attachments.md).
   const pending = await drainPendingTargets(db, deviceId);
   for (const envelope of pending) {
-    socket.emit("envelope:deliver", toWireEnvelope(envelope));
+    socket.emit("envelope:deliver", await toWireEnvelope(envelope, r2));
   }
 
   socket.on("message:send", (payload: unknown, ack?: (response: unknown) => void) => {
-    void handleMessageSend(io, db, env, socket, payload, ack);
+    void handleMessageSend(io, db, env, r2, socket, payload, ack);
   });
 
   socket.on("envelope:ack", (payload: unknown) => {
-    void handleEnvelopeAck(db, socket, payload);
+    void handleEnvelopeAck(db, r2, socket, payload);
   });
 
   let deviceLinkJoinAttempts = 0;
@@ -132,6 +143,7 @@ async function handleMessageSend(
   io: Server,
   db: Db,
   env: typeof Env,
+  r2: R2Context,
   socket: Socket,
   rawPayload: unknown,
   ack?: (response: unknown) => void,
@@ -162,18 +174,19 @@ async function handleMessageSend(
 
   ack?.({ clientId: input.clientId, envelopeId: envelope.id, seq: envelope.seq });
 
+  const wireEnvelope = await toWireEnvelope(envelope, r2);
   for (const targetDeviceId of targetDeviceIds) {
-    io.to(deviceRoom(targetDeviceId)).emit("envelope:deliver", toWireEnvelope(envelope));
+    io.to(deviceRoom(targetDeviceId)).emit("envelope:deliver", wireEnvelope);
   }
 }
 
-async function handleEnvelopeAck(db: Db, socket: Socket, rawPayload: unknown): Promise<void> {
+async function handleEnvelopeAck(db: Db, r2: R2Context, socket: Socket, rawPayload: unknown): Promise<void> {
   const { deviceId } = socket.data as SocketData;
 
   const parsed = envelopeAckSchema.safeParse(rawPayload);
   if (!parsed.success) return;
 
-  await ackEnvelope(db, { envelopeId: parsed.data.envelopeId, deviceId });
+  await ackEnvelope(db, { envelopeId: parsed.data.envelopeId, deviceId }, r2);
 }
 
 // The new/empty device ("host") is already listening in its own deviceRoom (joined on connect,
@@ -251,8 +264,11 @@ async function handleDeviceLinkCancel(io: Server, redis: Redis, socket: Socket, 
   }
 }
 
-function toWireEnvelope(envelope: Envelope) {
-  return {
+// docs/ADR/0009-media-attachments.md: the one place a presigned download URL gets minted, for both
+// fresh delivery and reconnect drain. Delivering this specific envelope to this specific device
+// *is* the authorization check — no separate "give me a download URL for key X" endpoint exists.
+async function toWireEnvelope(envelope: Envelope, r2: R2Context) {
+  const base = {
     id: envelope.id,
     conversationId: envelope.conversationId,
     senderId: envelope.senderId,
@@ -262,4 +278,16 @@ function toWireEnvelope(envelope: Envelope) {
     payload: envelope.payload,
     createdAt: envelope.createdAt,
   };
+
+  const r2Key = tryExtractR2Key(envelope.contentType, envelope.payload);
+  if (!r2Key) return base;
+
+  try {
+    const attachmentDownloadUrl = await createDownloadUrl(r2.client, r2.bucket, r2Key);
+    return { ...base, attachmentDownloadUrl };
+  } catch {
+    // Best-effort: the client will just see a missing attachmentDownloadUrl and can't render the
+    // image — not worth failing the whole delivery over.
+    return base;
+  }
 }

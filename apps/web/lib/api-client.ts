@@ -124,3 +124,10 @@ export function getStorageSummary(accessToken: string): Promise<StorageSummary> 
 export function startDeviceLink(accessToken: string): Promise<{ code: string; expiresAt: string }> {
   return request("/devices/link/start", { method: "POST", ...authed(accessToken) });
 }
+
+export function requestUploadUrl(
+  accessToken: string,
+  input: { contentType: string; size: number },
+): Promise<{ uploadUrl: string; r2Key: string }> {
+  return request("/media/upload-url", { method: "POST", body: JSON.stringify(input), ...authed(accessToken) });
+}

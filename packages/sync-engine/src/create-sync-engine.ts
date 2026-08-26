@@ -1,5 +1,6 @@
 import { appendOutboxEntry, insertDormancyReturnMarkers, insertIncomingEnvelope, type LocalStoreDb } from "@driftline/local-store";
 
+import { downloadAttachment } from "./attachment-download.js";
 import { EventQueue } from "./event-queue.js";
 import { flushOutbox, sendOutboxEntry } from "./outbox.js";
 import type { SyncEngineSocket, WireEnvelope } from "./types.js";
@@ -16,8 +17,10 @@ export interface CreateSyncEngineOptions {
 export interface SyncEngine {
   /** Queues a message for sending — local-first: the outbox row lands immediately, then sends
    * right away if connected or on the next reconnect otherwise. Resolves once the send attempt
-   * (success or failure) completes, not just once it's queued. */
-  sendMessage: (conversationId: string, contentType: string, payload: string) => Promise<void>;
+   * (success or failure) completes, not just once it's queued. `attachmentPayload` is the sender's
+   * own already-local file bytes for a media message (docs/ADR/0009-media-attachments.md) — never
+   * sent to the server, only cached locally so the optimistic bubble can render immediately. */
+  sendMessage: (conversationId: string, contentType: string, payload: string, attachmentPayload?: string) => Promise<void>;
   dispose: () => void;
 }
 
@@ -27,6 +30,17 @@ export function createSyncEngine(options: CreateSyncEngineOptions): SyncEngine {
   const sender = { socket, selfUserId, selfDeviceId };
 
   async function handleEnvelopeDeliver(wireEnvelope: WireEnvelope): Promise<void> {
+    let attachmentPayload: string | undefined;
+    if (wireEnvelope.attachmentDownloadUrl) {
+      attachmentPayload = await downloadAttachment(wireEnvelope.attachmentDownloadUrl);
+      if (attachmentPayload === undefined) {
+        // Every retry failed — do NOT insert or ack (docs/ADR/0009-media-attachments.md). The
+        // target stays pending server-side and this envelope (with a fresh download URL) is
+        // redelivered on this device's next reconnect.
+        return;
+      }
+    }
+
     await insertIncomingEnvelope(store, {
       envelopeId: wireEnvelope.id,
       conversationId: wireEnvelope.conversationId,
@@ -35,10 +49,13 @@ export function createSyncEngine(options: CreateSyncEngineOptions): SyncEngine {
       seq: wireEnvelope.seq,
       contentType: wireEnvelope.contentType,
       payload: wireEnvelope.payload,
+      attachmentPayload,
       createdAt: new Date(wireEnvelope.createdAt),
     });
     // Ack only after the durable local write above commits — never inferred from the socket event
-    // itself (docs/REALTIME_PROTOCOL.md's envelope:ack contract).
+    // itself (docs/REALTIME_PROTOCOL.md's envelope:ack contract). For a media message this is the
+    // load-bearing step: once acked, the server may purge the R2 object at any time, so the
+    // attachment bytes must already be durably saved locally before this fires.
     socket.emit("envelope:ack", { envelopeId: wireEnvelope.id });
   }
 
@@ -71,14 +88,14 @@ export function createSyncEngine(options: CreateSyncEngineOptions): SyncEngine {
   socket.on("dormancy:return", onDormancyReturn);
   socket.on("connect", onConnect);
 
-  async function sendMessage(conversationId: string, contentType: string, payload: string): Promise<void> {
+  async function sendMessage(conversationId: string, contentType: string, payload: string, attachmentPayload?: string): Promise<void> {
     const clientId = crypto.randomUUID();
-    const entry = { clientId, conversationId, contentType, payload, createdAt: new Date() };
+    const entry = { clientId, conversationId, contentType, payload, attachmentPayload, createdAt: new Date() };
 
     await queue.enqueue(async () => {
       await appendOutboxEntry(store, entry);
       if (socket.connected) {
-        await sendOutboxEntry(store, sender, { ...entry, status: "pending" as const });
+        await sendOutboxEntry(store, sender, { ...entry, attachmentPayload: entry.attachmentPayload ?? null, status: "pending" as const });
       }
     });
   }

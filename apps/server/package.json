@@ -12,6 +12,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.716.0",
+    "@aws-sdk/s3-request-presigner": "^3.716.0",
     "@driftline/db": "workspace:*",
     "@fastify/cors": "^10.0.2",
     "@fastify/rate-limit": "^10.2.2",

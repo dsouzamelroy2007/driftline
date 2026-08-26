@@ -59,7 +59,7 @@ docs/ADR/                           — 0001 stack, 0002 retention/storage, 0003
 listed in the master plan's repo layout — `ARCHITECTURE.md`, `SYNC_MODEL.md`, `SCALE.md`,
 `SECURITY.md`, `RUNBOOK.md`, `CASE_STUDY.md`, `BACKUP_FORMAT.md` — land in later phases.)
 
-## Repo layout (as of Phase 6, part 2a)
+## Repo layout (as of Phase 6, part 2b)
 
 ```
 apps/server/           Fastify + Socket.IO. Auth/device/discovery/conversations/users/storage REST
@@ -90,12 +90,22 @@ packages/local-store/   On-device chat history — Drizzle SQLite schema/reposit
                         from apps/web since indexing needs the decode half at insert time) — the new
                         timeline_entries_fts virtual table is a hand-written migration (FTS5 isn't
                         expressible via drizzle-kit's schema diffing), populated in application code
-                        since payload is base64 and no SQL trigger can decode it.
+                        since payload is base64 and no SQL trigger can decode it. Part 2b added an
+                        attachment_payload column (both timeline_entries and outbox) — a normal
+                        drizzle-kit-generated migration this time — holding the locally-cached base64
+                        image bytes for a media message, kept separate from payload (which stays
+                        exactly the small { r2Key, size } descriptor received/sent over the wire); see
+                        docs/ADR/0009-media-attachments.md.
 packages/sync-engine/   Drives local-store from docs/REALTIME_PROTOCOL.md. createSyncEngine({socket,
                         store, selfUserId, selfDeviceId}) — depends on socket.io-client directly
                         (no custom transport abstraction). All inbound socket events + outbox
                         flushes funnel through one serialized EventQueue so dormancy:return's
-                        fan-out can't race a concurrently-arriving envelope:deliver.
+                        fan-out can't race a concurrently-arriving envelope:deliver. Phase 6 part 2b
+                        added attachment-download.ts (retry+backoff fetch->base64) — a media
+                        envelope's attachment is downloaded and durably stored locally *before*
+                        insertIncomingEnvelope/ack fire; a permanent download failure skips both, so
+                        the envelope stays pending server-side and is redelivered (fresh URL) on next
+                        reconnect (docs/ADR/0009-media-attachments.md).
 packages/backup/        Encrypted backup export/import + the device-linking P2P wire format
                         (docs/ADR/0007, docs/BACKUP_FORMAT.md). Web Crypto only (PBKDF2-SHA256 ->
                         AES-256-GCM), no crypto dependency — works identically in the browser and
@@ -128,7 +138,9 @@ messages held on our servers" widget, counts distinct envelopes via `envelope_ta
 `envelopes`, never touches payload), `GET /devices`, `DELETE /devices/:id` (revoke — now also
 synchronously purges the device's pending envelope targets, see below), `POST /devices/link/start`
 (authed, rate-limited — mints an 8-digit device-linking pairing code, Redis-only state, 120s TTL;
-see Relay note below), `GET /discovery`
+see Relay note below), `POST /media/upload-url` (authed, rate-limited, conversation-agnostic on
+purpose — mints a presigned R2 PUT URL for an image attachment, allowlisted content types, 10MB cap;
+see `docs/ADR/0009-media-attachments.md`), `GET /discovery`
 (service-discovery contract, Redis heartbeat registry), `POST /auth/magic-link/request`,
 `POST /auth/magic-link/verify` (Redis-backed, single-use via `GETDEL`), `GET
 /auth/oauth/github/start`, `GET /auth/oauth/github/callback` (redirects to
@@ -161,8 +173,12 @@ and dormancy sweep run as in-process `setInterval`s (every 5 min), not a separat
 presence, typing indicators, read receipts — `docs/RETENTION.md` §2 already reserves Redis TTL rows
 for presence/typing, but no relay event for either was ever implemented (checked directly against
 `modules/relay/socket.ts` during Phase 5); the web UI only shows sent/delivered, derived from ack.
-Also not built: attachments/R2 and client-side search (both deferred to a Phase 6 follow-up pass —
-this pass covered backup export/import and device linking only, see Status below).
+Phase 6 part 2b added media attachments (`docs/ADR/0009-media-attachments.md`): a new
+`modules/media/` (upload-URL endpoint, `tryExtractR2Key`/`cleanupPurgedMedia`) and
+`lib/r2-client.ts` (`@aws-sdk/client-s3` presigned PUT/GET/delete). All three purge paths
+(ack/sweeper/revocation) now delete a purged envelope's R2 object too, post-commit only — see
+Status below. Not built: presence, typing indicators, read receipts, thumbnails, generic (non-image)
+file attachments.
 
 ## Working agreement reminders
 
@@ -376,7 +392,44 @@ green per-package; the one failure in a single combined `turbo run` was a `.next
 the long-running dev server and the production build sharing the same output directory — confirmed
 by immediately re-running the same checks in isolation, not a code issue.
 
-Next: Phase 6, part 2b (media/attachments via Cloudflare R2) — the last piece of the original Phase
-6 scope, gated on the user setting up an R2 account/API token (click-by-click steps already given).
+**Phase 6, part 2b (Media attachments via Cloudflare R2): complete on `main`.** The last piece of
+the original Phase 6 scope. Image attachments (JPEG/PNG/WebP/GIF, 10MB cap) — scoped deliberately
+narrower than MVP+'s full attachment feature set (`docs/ROADMAP.md`), matching what Phase 6's own
+sequencing called "media." Full design in `docs/ADR/0009-media-attachments.md`; the short version:
+an attachment is a specially-interpreted envelope payload (`{ r2Key, size }`, base64 JSON — still
+opaque to the server), not a new entity, so `message:send`/fan-out/sequencing/ack needed zero
+mechanical changes. Upload is a direct-to-R2 presigned PUT (bytes never touch this server); download
+authorization rides on the existing fan-out delivery with zero new endpoints — `toWireEnvelope`
+mints a presigned GET URL only when delivering to the device that's actually a legitimate recipient,
+which is already the only check that matters. All three purge paths (ack/sweeper/revocation) now
+delete a purged envelope's R2 object too, strictly *after* their Postgres transaction has committed
+— R2 can't be transactional with Postgres and must never block or roll back the actual retention
+guarantee. Client-side, the attachment is downloaded and durably saved locally *before*
+insert-and-ack, mirroring the exact reasoning text messages already used ("ack only after the
+durable local write commits") one step further: once acked, the R2 object can be purged at any time.
+
+Caught and fixed before it shipped: the first snippet/highlight design isn't part of this feature,
+but a closely-related real find is — while building the composer's file-picker flow, confirmed via
+code review (not live testing) that `MessageBubble`'s image branch needed an explicit "Image not
+available" fallback for a missing `attachmentPayload`, since `packages/backup`/device-linking
+(ADR-0007/0008, both predating this ADR) don't carry attachment bytes through backup restore or P2P
+transfer yet — a documented, accepted gap (ADR-0009's Consequences), not a silent crash risk.
+
+One real omission found and fixed *live*, not by the unit suite: my own first round of click-by-click
+R2 setup instructions to the user only specified `AllowedMethods: ["PUT"]` in the bucket's CORS
+policy, missing that the *download* side also fetches directly browser→R2 (a GET), which needs its
+own CORS allowance. Live verification caught this immediately as a real, reproducible CORS console
+error on the recipient's side — fixed by updating the instructions (and the bucket) to allow both
+`PUT` and `GET`, then re-verified clean. Live-verified end-to-end against the real R2 bucket and two
+independent headless-Chromium contexts: a real (if tiny) PNG uploaded by one account, received and
+correctly rendered by the other, and — the actual point of this whole design — confirmed via the
+server's own structured logs that `envelope_purged_total{reason:"ack"}` and
+`media_object_purged_total` fired back-to-back the instant the recipient acked, proving the R2
+object and the Postgres row are purged together, not just in theory.
+
+Full pipeline (lint/typecheck/test/build) green per-package across all four touched packages
+(`apps/server`, `packages/local-store`, `packages/sync-engine`, `apps/web`).
+
 Also still open: the presence/typing/read-receipt gap and the deferred custom-group-name schema
-change noted in Phase 5, revisit if either becomes worth prioritizing.
+change noted in Phase 5, revisit if either becomes worth prioritizing. Phase 6 (all parts) is now
+complete; next up is whatever phase the user wants to tackle next — see docs/ROADMAP.md.

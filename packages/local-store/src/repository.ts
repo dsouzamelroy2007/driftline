@@ -104,6 +104,11 @@ export interface IncomingEnvelope {
   seq: number;
   contentType: string;
   payload: string;
+  // The downloaded attachment bytes for a media message (docs/ADR/0009-media-attachments.md) —
+  // the caller (packages/sync-engine) must have already durably fetched these before calling this
+  // function, since insertion is what allows the caller to then ack, and once acked the server's
+  // R2 object can be purged at any time.
+  attachmentPayload?: string;
   createdAt: Date;
 }
 
@@ -137,6 +142,7 @@ export async function insertIncomingEnvelope(db: LocalStoreDb, envelope: Incomin
         seq: envelope.seq,
         contentType: envelope.contentType,
         payload: envelope.payload,
+        attachmentPayload: envelope.attachmentPayload,
         createdAt: envelope.createdAt,
       })
       .returning({ id: timelineEntries.id });
@@ -217,6 +223,11 @@ export interface ImportEntryInput {
   seq: number;
   contentType: string;
   payload: string;
+  // Not yet populated by packages/backup's export/import or device-linking transfer (Phase 6 parts
+  // 1/2b didn't wire attachment bytes through either flow — a documented limitation, see
+  // docs/ADR/0009-media-attachments.md) — accepted here regardless so this function is ready for
+  // whenever that's added, without another schema/signature change.
+  attachmentPayload?: string;
   createdAt: Date;
 }
 
@@ -265,6 +276,7 @@ export async function importTimelineEntries(
             seq: entry.seq,
             contentType: entry.contentType,
             payload: entry.payload,
+            attachmentPayload: entry.attachmentPayload,
             createdAt: entry.createdAt,
           })
           .onConflictDoNothing({ target: timelineEntries.envelopeId })
@@ -317,6 +329,8 @@ export interface NewOutboxInput {
   conversationId: string;
   contentType: string;
   payload: string;
+  // For an outgoing media message, the sender's own file bytes (docs/ADR/0009-media-attachments.md).
+  attachmentPayload?: string;
   createdAt: Date;
 }
 
@@ -341,6 +355,7 @@ export interface ReconcileOutboxInput {
   senderDeviceId: string;
   contentType: string;
   payload: string;
+  attachmentPayload?: string;
   createdAt: Date;
 }
 
@@ -369,6 +384,7 @@ export async function reconcileOutboxEntry(db: LocalStoreDb, input: ReconcileOut
         seq: input.seq,
         contentType: input.contentType,
         payload: input.payload,
+        attachmentPayload: input.attachmentPayload,
         createdAt: input.createdAt,
       })
       .returning({ id: timelineEntries.id });

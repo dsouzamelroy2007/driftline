@@ -16,15 +16,45 @@ import { RequireAuth } from "../../../components/auth-gate";
 import { listConversations } from "../../../lib/api-client";
 import { useAuth } from "../../../lib/auth-context";
 import { conversationDisplayName } from "../../../lib/conversation-name";
+import { uploadAttachment, validateAttachmentFile } from "../../../lib/attachment-upload";
 import { useLocalStore } from "../../../lib/local-store-context";
 import { setLastReadId } from "../../../lib/read-state";
 import { useSyncEngine } from "../../../lib/sync-context";
 import { noticeCopyFor } from "../../../lib/timeline-copy";
-import { inputClass, linkClass, primaryButtonCompactClass } from "../../../lib/ui-classes";
+import { errorTextClass, inputClass, linkClass, primaryButtonCompactClass, secondaryButtonCompactClass } from "../../../lib/ui-classes";
 import type { Conversation } from "../../../lib/types";
 
 const POLL_MS = 1500;
 const PAGE_SIZE = 50;
+
+// Mirrors apps/server's modules/media/media.service.ts allowlist (docs/ADR/0009-media-attachments.md).
+const IMAGE_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+
+// Reconstructs a displayable image from the locally-cached base64 bytes (either downloaded from R2
+// at delivery time, or the sender's own file at compose time) via an object URL — never a giant
+// inline data: URI. Revoked on unmount/change so the browser can reclaim the memory.
+function AttachmentImage({ contentType, base64 }: { contentType: string; base64: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    try {
+      const binary = atob(base64);
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      objectUrl = URL.createObjectURL(new Blob([bytes], { type: contentType }));
+      setUrl(objectUrl);
+    } catch {
+      setUrl(null);
+    }
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [contentType, base64]);
+
+  if (!url) return <p className="italic opacity-80">Image not available</p>;
+  // An object: URL — next/image can't handle it, same reasoning as lib/qr-code.tsx's plain <img>.
+  return <img src={url} alt="Attachment" className="max-h-80 max-w-full rounded-control object-contain" />;
+}
 
 function GapOrSystemNotice({ entry }: { entry: TimelineEntry }) {
   const copy = noticeCopyFor(entry);
@@ -47,7 +77,7 @@ function GapOrSystemNotice({ entry }: { entry: TimelineEntry }) {
 }
 
 function MessageBubble({ entry, isSelf }: { entry: TimelineEntry; isSelf: boolean }) {
-  const text = entry.contentType === "text/plain" && entry.payload ? safeDecode(entry.payload) : "Unsupported message";
+  const isImage = IMAGE_CONTENT_TYPES.includes(entry.contentType ?? "");
   return (
     <li className={`flex ${isSelf ? "justify-end" : "justify-start"}`}>
       <div
@@ -55,7 +85,17 @@ function MessageBubble({ entry, isSelf }: { entry: TimelineEntry; isSelf: boolea
           isSelf ? "bg-accent-primary text-white" : "bg-bg-surface-raised text-text-primary"
         }`}
       >
-        <p className="whitespace-pre-wrap break-words">{text}</p>
+        {isImage ? (
+          entry.attachmentPayload ? (
+            <AttachmentImage contentType={entry.contentType!} base64={entry.attachmentPayload} />
+          ) : (
+            <p className="italic opacity-80">Image not available</p>
+          )
+        ) : (
+          <p className="whitespace-pre-wrap break-words">
+            {entry.contentType === "text/plain" && entry.payload ? safeDecode(entry.payload) : "Unsupported message"}
+          </p>
+        )}
         <p className={`mt-1 text-right text-xs ${isSelf ? "text-white/70" : "text-text-muted"}`}>
           {new Date(entry.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
         </p>
@@ -65,11 +105,15 @@ function MessageBubble({ entry, isSelf }: { entry: TimelineEntry; isSelf: boolea
 }
 
 function PendingBubble({ entry }: { entry: OutboxEntry }) {
-  const text = safeDecode(entry.payload);
+  const isImage = IMAGE_CONTENT_TYPES.includes(entry.contentType);
   return (
     <li className="flex justify-end">
       <div className="max-w-[75%] rounded-bubble bg-accent-primary px-3 py-2 text-sm text-white opacity-60">
-        <p className="whitespace-pre-wrap break-words">{text}</p>
+        {isImage && entry.attachmentPayload ? (
+          <AttachmentImage contentType={entry.contentType} base64={entry.attachmentPayload} />
+        ) : (
+          <p className="whitespace-pre-wrap break-words">{isImage ? "Sending image…" : safeDecode(entry.payload)}</p>
+        )}
         <p className="mt-1 text-right text-xs text-white/70">{entry.status === "failed" ? "Failed — will retry" : "Sending…"}</p>
       </div>
     </li>
@@ -98,7 +142,10 @@ function ThreadContent() {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [announcement, setAnnouncement] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLUListElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const lastAnnouncedIdRef = useRef(0);
 
   useEffect(() => {
@@ -169,6 +216,30 @@ function ThreadContent() {
     }
   }
 
+  async function handleFileSelected(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = ""; // allow re-selecting the same file later
+    if (!file || !engine) return;
+
+    const validationError = validateAttachmentFile(file);
+    if (validationError) {
+      setUploadError(validationError);
+      return;
+    }
+
+    setUploadError(null);
+    setUploading(true);
+    try {
+      const uploaded = await authedCall((token) => uploadAttachment(token, file));
+      await engine.sendMessage(conversationId, uploaded.contentType, uploaded.descriptorPayload, uploaded.attachmentPayload);
+      await refresh();
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : "Upload failed. Try again.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
   if (conversation === "not-found") {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-3 text-center">
@@ -231,18 +302,40 @@ function ThreadContent() {
         </p>
       )}
 
-      <form onSubmit={handleSend} className="flex gap-2 border-t border-text-muted/20 p-3">
-        <input
-          className={inputClass + " min-w-0 flex-1"}
-          placeholder="Message"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          maxLength={100_000}
-          disabled={!engine}
-        />
-        <button type="submit" className={primaryButtonCompactClass} disabled={!draft.trim() || sending || !engine}>
-          Send
-        </button>
+      <form onSubmit={handleSend} className="flex flex-col gap-2 border-t border-text-muted/20 p-3">
+        {uploadError && (
+          <p className={errorTextClass} role="alert">
+            {uploadError}
+          </p>
+        )}
+        <div className="flex gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            className="hidden"
+            onChange={(event) => void handleFileSelected(event)}
+          />
+          <button
+            type="button"
+            className={secondaryButtonCompactClass}
+            onClick={() => fileInputRef.current?.click()}
+            disabled={!engine || uploading}
+          >
+            {uploading ? "Uploading…" : "Attach"}
+          </button>
+          <input
+            className={inputClass + " min-w-0 flex-1"}
+            placeholder="Message"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            maxLength={100_000}
+            disabled={!engine}
+          />
+          <button type="submit" className={primaryButtonCompactClass} disabled={!draft.trim() || sending || !engine}>
+            Send
+          </button>
+        </div>
       </form>
     </main>
   );

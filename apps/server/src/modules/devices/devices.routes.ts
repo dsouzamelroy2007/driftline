@@ -13,7 +13,7 @@ export default async function devicesRoutes(fastify: FastifyInstance): Promise<v
   });
 
   fastify.delete<{ Params: { id: string } }>("/devices/:id", async (request, reply) => {
-    const revoked = await revokeDevice(fastify.db, request.params.id, request.user.id);
+    const revoked = await revokeDevice(fastify.db, request.params.id, request.user.id, fastify.r2);
     if (!revoked) {
       throw new HttpError(404, "Device not found");
     }

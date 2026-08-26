@@ -7,10 +7,12 @@ import {
   type Db,
   type Envelope,
 } from "@driftline/db";
+import type { S3Client } from "@aws-sdk/client-s3";
 import { and, asc, eq, isNull, ne, sql } from "drizzle-orm";
 
 import { HttpError } from "../../lib/errors.js";
 import { logEnvelopePurged } from "../../lib/metrics.js";
+import { cleanupPurgedMedia } from "../media/media.service.js";
 import { purgeEnvelopeIfComplete } from "./purge.js";
 
 export interface SendEnvelopeInput {
@@ -98,8 +100,11 @@ export interface AckEnvelopeResult {
 }
 
 // The hot path: every message ack runs this. See purge.ts for why the FOR UPDATE lock is required.
-export async function ackEnvelope(db: Db, input: AckEnvelopeInput): Promise<AckEnvelopeResult> {
-  return db.transaction(async (tx) => {
+// R2 cleanup (docs/ADR/0009-media-attachments.md) runs only *after* the transaction below has
+// committed — awaiting db.transaction(...) here, rather than returning it directly, is what makes
+// that possible: code after the await runs post-commit.
+export async function ackEnvelope(db: Db, input: AckEnvelopeInput, r2: { client: S3Client; bucket: string }): Promise<AckEnvelopeResult> {
+  const result = await db.transaction(async (tx) => {
     const [updated] = await tx
       .update(envelopeTargets)
       .set({ status: "delivered" })
@@ -117,12 +122,18 @@ export async function ackEnvelope(db: Db, input: AckEnvelopeInput): Promise<AckE
       return { purged: false };
     }
 
-    const result = await purgeEnvelopeIfComplete(tx, input.envelopeId);
-    if (result.purged) {
-      logEnvelopePurged("ack", input.envelopeId, result.size ?? 0);
+    const purgeResult = await purgeEnvelopeIfComplete(tx, input.envelopeId);
+    if (purgeResult.purged) {
+      logEnvelopePurged("ack", input.envelopeId, purgeResult.size ?? 0);
     }
-    return { purged: result.purged };
+    return purgeResult;
   });
+
+  if (result.purged) {
+    await cleanupPurgedMedia(r2.client, r2.bucket, result);
+  }
+
+  return { purged: result.purged };
 }
 
 // On reconnect a device drains what's currently pending for it — not cursor replay (ADR-0003 §2).

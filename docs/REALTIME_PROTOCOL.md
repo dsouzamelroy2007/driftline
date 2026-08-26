@@ -77,6 +77,7 @@ socket.emit(
 socket.on("envelope:deliver", (envelope: {
   id: string; conversationId: string; senderId: string; senderDeviceId: string;
   seq: number; contentType: string; payload: string; createdAt: string;
+  attachmentDownloadUrl?: string;
 }) => { ... });
 ```
 
@@ -84,6 +85,14 @@ Fired either immediately after a `message:send` fans out to an online device, or
 connect-drain (§3) for anything that queued while the device was offline/unconnected. The client
 cannot distinguish these two cases from the event itself and does not need to — both are "here is
 an envelope you haven't acked yet."
+
+**`attachmentDownloadUrl`** is present only when `payload` decodes to a media descriptor
+(`docs/ADR/0009-media-attachments.md`) — a short-TTL presigned R2 GET URL, minted fresh by the
+server at the moment of *this* delivery (both the fan-out case and the connect-drain case go through
+the same code, `modules/relay/socket.ts`'s `toWireEnvelope`), never a stale one from send time. The
+client must download and durably store the bytes locally *before* acking — the server may purge the
+R2 object the instant every recipient acks, so acking first would risk losing the attachment for
+good if the local write hadn't actually finished.
 
 ### `envelope:ack` (client → server, no response)
 
