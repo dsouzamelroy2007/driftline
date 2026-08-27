@@ -30,8 +30,8 @@ pattern, independently configurable).
 | Device record (id, userId, publicKey, platform, lastSeenAt, dormantAt, pushToken) | Postgres | Until revoked/deleted by user, or 30 days past dormancy with no return (configurable cleanup — see open question in §7) |
 | Conversation + membership (id, type, members, roles, joinedAt) | Postgres | Until conversation/account deletion |
 | `ConversationSequence` (monotonic counter, no content) | Postgres | Lifetime of the conversation |
-| Presence / heartbeat state | Redis, TTL 30s | Seconds |
-| Typing indicators | Redis, TTL a few seconds | Seconds |
+| Presence / "online" state | In-process (`modules/relay/socket.ts`, Phase 6 part 5, [ADR-0011](ADR/0011-presence-and-receipts.md) — supersedes the Redis-TTL plan originally sketched here) | Lifetime of the connection |
+| Typing indicators | Not built (Phase 6 part 5 scoped these out — see ADR-0011) | — |
 | Push token | Postgres (on `Device`) | Same as device |
 | Sweeper / purge logs | Structured logs (envelope ID, size, timestamp — never content) | Per log retention policy of the hosting platform |
 

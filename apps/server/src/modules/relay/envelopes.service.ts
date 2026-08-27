@@ -6,14 +6,15 @@ import {
   envelopes,
   type Db,
   type Envelope,
+  type Tx,
 } from "@driftline/db";
 import type { S3Client } from "@aws-sdk/client-s3";
-import { and, asc, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, count, eq, isNull, ne, sql } from "drizzle-orm";
 
 import { HttpError } from "../../lib/errors.js";
 import { logEnvelopePurged } from "../../lib/metrics.js";
 import { cleanupPurgedMedia } from "../media/media.service.js";
-import { purgeEnvelopeIfComplete } from "./purge.js";
+import { purgeEnvelopeIfComplete, type PurgeResult } from "./purge.js";
 
 export interface SendEnvelopeInput {
   conversationId: string;
@@ -95,8 +96,26 @@ export interface AckEnvelopeInput {
   deviceId: string;
 }
 
-export interface AckEnvelopeResult {
-  purged: boolean;
+// Extends PurgeResult (purged, size/contentType/payload when purged) with the delivery-tick fields
+// below — only present when this ack actually changed something (i.e. wasn't a no-op). The caller
+// (modules/relay/socket.ts) uses them to fan out envelope:delivered to the sender's own devices
+// (docs/ADR/0011-presence-and-receipts.md).
+export interface AckEnvelopeResult extends PurgeResult {
+  deliveredToAllRecipients?: boolean;
+  senderId?: string;
+  conversationId?: string;
+}
+
+// True once no EnvelopeTarget row belonging to a user other than the sender is still pending —
+// independent of the sender's *own* other devices (ADR-0003 §1's own-device sync targets), which
+// full purge also waits on. Checked separately so an account with a second, often-idle device still
+// sees a delivered tick promptly (docs/ADR/0011).
+async function isDeliveredToAllRecipients(tx: Tx, envelopeId: string, senderId: string): Promise<boolean> {
+  const [row] = await tx
+    .select({ pendingCount: count() })
+    .from(envelopeTargets)
+    .where(and(eq(envelopeTargets.envelopeId, envelopeId), eq(envelopeTargets.status, "pending"), ne(envelopeTargets.recipientUserId, senderId)));
+  return (row?.pendingCount ?? 0) === 0;
 }
 
 // The hot path: every message ack runs this. See purge.ts for why the FOR UPDATE lock is required.
@@ -104,7 +123,18 @@ export interface AckEnvelopeResult {
 // committed — awaiting db.transaction(...) here, rather than returning it directly, is what makes
 // that possible: code after the await runs post-commit.
 export async function ackEnvelope(db: Db, input: AckEnvelopeInput, r2: { client: S3Client; bucket: string }): Promise<AckEnvelopeResult> {
-  const result = await db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx): Promise<AckEnvelopeResult> => {
+    // Needed regardless of outcome below: once purged, the envelope row is gone, so senderId/
+    // conversationId have to be captured before that can happen.
+    const [envelopeRow] = await tx
+      .select({ senderId: envelopes.senderId, conversationId: envelopes.conversationId })
+      .from(envelopes)
+      .where(eq(envelopes.id, input.envelopeId))
+      .limit(1);
+    if (!envelopeRow) {
+      return { purged: false }; // Already purged by a concurrent ack, or unknown envelope.
+    }
+
     const [updated] = await tx
       .update(envelopeTargets)
       .set({ status: "delivered" })
@@ -118,7 +148,7 @@ export async function ackEnvelope(db: Db, input: AckEnvelopeInput, r2: { client:
       .returning();
 
     if (!updated) {
-      // Already acked, unknown envelope, or this device was never a target — idempotent no-op.
+      // Already acked, or this device was never a target — idempotent no-op.
       return { purged: false };
     }
 
@@ -126,14 +156,22 @@ export async function ackEnvelope(db: Db, input: AckEnvelopeInput, r2: { client:
     if (purgeResult.purged) {
       logEnvelopePurged("ack", input.envelopeId, purgeResult.size ?? 0);
     }
-    return purgeResult;
+
+    const deliveredToAllRecipients = purgeResult.purged || (await isDeliveredToAllRecipients(tx, input.envelopeId, envelopeRow.senderId));
+
+    return {
+      ...purgeResult,
+      deliveredToAllRecipients,
+      senderId: envelopeRow.senderId,
+      conversationId: envelopeRow.conversationId,
+    };
   });
 
   if (result.purged) {
     await cleanupPurgedMedia(r2.client, r2.bucket, result);
   }
 
-  return { purged: result.purged };
+  return result;
 }
 
 // On reconnect a device drains what's currently pending for it — not cursor replay (ADR-0003 §2).

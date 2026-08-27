@@ -18,12 +18,17 @@ import { listConversations } from "../../../lib/api-client";
 import { useAuth } from "../../../lib/auth-context";
 import { conversationAvatarUrl, conversationDisplayName } from "../../../lib/conversation-name";
 import { uploadAttachment, validateAttachmentFile } from "../../../lib/attachment-upload";
+import { formatLastSeen } from "../../../lib/format-last-seen";
 import { useLocalStore } from "../../../lib/local-store-context";
 import { setLastReadId } from "../../../lib/read-state";
 import { useSyncEngine } from "../../../lib/sync-context";
 import { noticeCopyFor } from "../../../lib/timeline-copy";
 import { errorTextClass, inputClass, linkClass, primaryButtonCompactClass, secondaryButtonCompactClass } from "../../../lib/ui-classes";
 import type { Conversation } from "../../../lib/types";
+
+// Phase 6 part 5 (docs/ADR/0011-presence-and-receipts.md): live-only, never persisted — starts fresh
+// every mount. "sent" isn't tracked explicitly; it's just the absence of an entry here.
+type DeliveryStatus = "delivered" | "read";
 
 const POLL_MS = 1500;
 const PAGE_SIZE = 50;
@@ -77,7 +82,17 @@ function GapOrSystemNotice({ entry }: { entry: TimelineEntry }) {
   );
 }
 
-function MessageBubble({ entry, isSelf }: { entry: TimelineEntry; isSelf: boolean }) {
+// Single check = sent (this device's own committed message, no event needed yet); double check,
+// white/70 = delivered; double check, status-online green (deliberately not blue — user asked to
+// avoid the exact WhatsApp look) = read. Plain Unicode rather than an icon dependency, matching this
+// app's existing minimal-deps posture (docs/ADR/0011-presence-and-receipts.md).
+function DeliveryTick({ status }: { status: DeliveryStatus | undefined }) {
+  if (status === "read") return <span className="text-status-online">✓✓</span>;
+  if (status === "delivered") return <span className="text-white/70">✓✓</span>;
+  return <span className="text-white/70">✓</span>;
+}
+
+function MessageBubble({ entry, isSelf, status }: { entry: TimelineEntry; isSelf: boolean; status?: DeliveryStatus }) {
   const isImage = IMAGE_CONTENT_TYPES.includes(entry.contentType ?? "");
   return (
     <li className={`flex ${isSelf ? "justify-end" : "justify-start"}`}>
@@ -97,8 +112,9 @@ function MessageBubble({ entry, isSelf }: { entry: TimelineEntry; isSelf: boolea
             {entry.contentType === "text/plain" && entry.payload ? safeDecode(entry.payload) : "Unsupported message"}
           </p>
         )}
-        <p className={`mt-1 text-right text-xs ${isSelf ? "text-white/70" : "text-text-muted"}`}>
+        <p className={`mt-1 flex items-center justify-end gap-1 text-xs ${isSelf ? "text-white/70" : "text-text-muted"}`}>
           {new Date(entry.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          {isSelf && <DeliveryTick status={status} />}
         </p>
       </div>
     </li>
@@ -133,7 +149,7 @@ function ThreadContent() {
   const { id: conversationId } = useParams<{ id: string }>();
   const { authedCall, user } = useAuth();
   const { db } = useLocalStore();
-  const { engine, connected } = useSyncEngine();
+  const { engine, connected, socket } = useSyncEngine();
   const router = useRouter();
 
   const [conversation, setConversation] = useState<Conversation | null | "not-found">(null);
@@ -145,9 +161,13 @@ function ThreadContent() {
   const [announcement, setAnnouncement] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // Phase 6 part 5 (docs/ADR/0011-presence-and-receipts.md) — live-only, reset on every mount.
+  const [messageStatus, setMessageStatus] = useState<Map<string, DeliveryStatus>>(new Map());
+  const [livePresence, setLivePresence] = useState<{ online: boolean; lastSeenAt: string | null } | null>(null);
   const scrollRef = useRef<HTMLUListElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastAnnouncedIdRef = useRef(0);
+  const lastReadSeqSentRef = useRef(0);
 
   useEffect(() => {
     authedCall((token) => listConversations(token))
@@ -175,8 +195,13 @@ function ThreadContent() {
   }, [refresh]);
 
   const sortedEntries = useMemo(() => [...entriesById.values()].sort((a, b) => a.id - b.id), [entriesById]);
+  const isDirect = conversation && conversation !== "not-found" && conversation.type === "direct";
+  const otherMemberId =
+    conversation && conversation !== "not-found" ? conversation.members.find((member) => member.userId !== user?.id)?.userId : undefined;
 
-  // Mark-as-read + ARIA live announcement for the newest incoming message (docs/UI_DIRECTION.md §9).
+  // Mark-as-read + ARIA live announcement for the newest incoming message (docs/UI_DIRECTION.md §9),
+  // and (Phase 6 part 5) tell the other side how far we've read, direct conversations only
+  // (docs/ADR/0011-presence-and-receipts.md).
   useEffect(() => {
     if (sortedEntries.length === 0) return;
     const newest = sortedEntries[sortedEntries.length - 1]!;
@@ -186,7 +211,55 @@ function ThreadContent() {
       lastAnnouncedIdRef.current = newest.id;
       setAnnouncement(newest.contentType === "text/plain" && newest.payload ? safeDecode(newest.payload) : "New message");
     }
-  }, [sortedEntries, conversationId, user?.id]);
+
+    if (isDirect && socket && newest.kind === "message" && newest.seq != null && newest.seq > lastReadSeqSentRef.current) {
+      lastReadSeqSentRef.current = newest.seq;
+      socket.emit("conversation:read", { conversationId, throughSeq: newest.seq });
+    }
+  }, [sortedEntries, conversationId, user?.id, isDirect, socket]);
+
+  // Live delivery/read ticks and presence (Phase 6 part 5) — none of this touches local-store; it's
+  // ephemeral UI state that resets on every mount (docs/ADR/0011-presence-and-receipts.md).
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleDelivered = (payload: { envelopeId: string; conversationId: string }) => {
+      if (payload.conversationId !== conversationId) return;
+      setMessageStatus((current) => {
+        if (current.get(payload.envelopeId) === "read") return current; // never downgrade
+        const next = new Map(current);
+        next.set(payload.envelopeId, "delivered");
+        return next;
+      });
+    };
+
+    const handleRead = (payload: { conversationId: string; throughSeq: number }) => {
+      if (payload.conversationId !== conversationId) return;
+      setMessageStatus((current) => {
+        const next = new Map(current);
+        for (const entry of entriesById.values()) {
+          if (entry.kind === "message" && entry.senderId === user?.id && entry.envelopeId && entry.seq != null && entry.seq <= payload.throughSeq) {
+            next.set(entry.envelopeId, "read");
+          }
+        }
+        return next;
+      });
+    };
+
+    const handlePresence = (payload: { userId: string; online: boolean; lastSeenAt: string | null }) => {
+      if (payload.userId !== otherMemberId) return;
+      setLivePresence({ online: payload.online, lastSeenAt: payload.lastSeenAt });
+    };
+
+    socket.on("envelope:delivered", handleDelivered);
+    socket.on("conversation:read", handleRead);
+    socket.on("presence:update", handlePresence);
+    return () => {
+      socket.off("envelope:delivered", handleDelivered);
+      socket.off("conversation:read", handleRead);
+      socket.off("presence:update", handlePresence);
+    };
+  }, [socket, conversationId, entriesById, user?.id, otherMemberId]);
 
   async function loadOlder() {
     if (!db || sortedEntries.length === 0) return;
@@ -252,6 +325,9 @@ function ThreadContent() {
     );
   }
 
+  const otherMemberSnapshot = otherMemberId ? conversation?.members.find((m) => m.userId === otherMemberId) : undefined;
+  const presence = livePresence ?? (otherMemberSnapshot ? { online: otherMemberSnapshot.online, lastSeenAt: otherMemberSnapshot.lastSeenAt } : null);
+
   return (
     <main className="mx-auto flex min-h-screen max-w-lg flex-col">
       <header className="flex items-center gap-3 border-b border-text-muted/20 px-4 py-3">
@@ -261,9 +337,14 @@ function ThreadContent() {
         {conversation && user && (
           <Avatar name={conversationDisplayName(conversation, user.id)} avatarUrl={conversationAvatarUrl(conversation, user.id)} size="sm" />
         )}
-        <h1 className="flex-1 truncate font-medium text-text-primary">
-          {conversation && user ? conversationDisplayName(conversation, user.id) : "…"}
-        </h1>
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate font-medium text-text-primary">
+            {conversation && user ? conversationDisplayName(conversation, user.id) : "…"}
+          </h1>
+          {isDirect && presence && (
+            <p className="truncate text-xs text-text-muted">{presence.online ? "Online" : formatLastSeen(presence.lastSeenAt)}</p>
+          )}
+        </div>
         {conversation && (
           <Link href={`/chat/${conversationId}/settings`} className={linkClass + " text-sm"}>
             Details
@@ -290,7 +371,12 @@ function ThreadContent() {
         )}
         {sortedEntries.map((entry) =>
           entry.kind === "message" ? (
-            <MessageBubble key={entry.id} entry={entry} isSelf={entry.senderId === user?.id} />
+            <MessageBubble
+              key={entry.id}
+              entry={entry}
+              isSelf={entry.senderId === user?.id}
+              status={entry.envelopeId ? messageStatus.get(entry.envelopeId) : undefined}
+            />
           ) : (
             <GapOrSystemNotice key={entry.id} entry={entry} />
           ),

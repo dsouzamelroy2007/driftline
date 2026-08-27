@@ -44,6 +44,11 @@ In order, before any client-sent event is processed:
    **`envelope:deliver`** events, ordered by `(conversationId, seq)`. This is the entire catch-up
    mechanism (ADR-0003 §2) — "what's pending for me right now," not a cursor replay. A brand-new
    device has no rows to drain and receives nothing; that's expected, not an error (ADR-0003 §4).
+4. If this is this user's *first* currently-connected device (Phase 6 part 5,
+   `docs/ADR/0011-presence-and-receipts.md`), a **`presence:update`** with `online: true` fans out to
+   every device of every user who shares a conversation with them. On disconnect, the same happens in
+   reverse once their *last* device disconnects, and `lastSeenAt` is updated again at that point too
+   (not just on connect, as before this phase).
 
 ## 4. Events
 
@@ -112,6 +117,46 @@ after a dropped connection is always safe).
 
 See §3 point 2. Purely a signal; the client is responsible for rendering the gap notice.
 
+### `envelope:delivered` (server → client) — Phase 6 part 5
+
+```ts
+socket.on("envelope:delivered", (payload: { envelopeId: string; conversationId: string }) => { ... });
+```
+
+Fired to every one of the *sender's* active devices once every recipient's `EnvelopeTarget` (every
+target whose `recipientUserId` isn't the sender) has acked — see `docs/ADR/0011-presence-and-
+receipts.md` for why this is checked independently of full purge (which also requires the sender's
+own other devices to ack). Live-only: no persistence, no catch-up for a sender device that was
+offline at the moment this fired.
+
+### `conversation:read` (bidirectional) — Phase 6 part 5
+
+```ts
+// client → server, direct conversations only
+socket.emit("conversation:read", { conversationId: string, throughSeq: number });
+// server → the other member's every active device
+socket.on("conversation:read", (payload: { conversationId: string; throughSeq: number }) => { ... });
+```
+
+A watermark, not a per-message flag — the receiving client marks every one of its own sent messages
+in that conversation with `seq <= throughSeq` as read. The server validates the conversation is
+`type: "direct"` and the emitting device is a member, then relays the same shape onward — pure
+signaling, same posture as `device-link:signal`, no Postgres/Redis persistence. Scoped to direct
+conversations only (`docs/ADR/0011`); groups get delivery ticks but not per-message read state.
+
+### `presence:update` (server → client) — Phase 6 part 5
+
+```ts
+socket.on("presence:update", (payload: { userId: string; online: boolean; lastSeenAt: string | null }) => { ... });
+```
+
+Fired to every device of every user who shares at least one conversation with `userId`, on that
+user's online devices transitioning from zero to one (online) or one to zero (offline). "Online" is
+in-process state (`docs/ADR/0011` — not the Redis heartbeat `docs/RETENTION.md` §2 originally
+planned); `lastSeenAt` mirrors `devices.lastSeenAt`, now updated on disconnect as well as connect. A
+conversation's `members` array (`GET`/`POST /conversations`) carries the same two fields as an
+initial snapshot, resolved fresh on every call.
+
 ### `device-link:join` (client → server, with ack callback)
 
 ```ts
@@ -173,6 +218,12 @@ Fired at the device that didn't call `device-link:cancel`, telling it the other 
 - **No delivery guarantee beyond the 30-day window.** If every recipient device is dormant/offline
   for the entire window, the sweeper purges the envelope unconditionally at `expiresAt`
   (`docs/RETENTION.md` §3) — the sender does not get a distinct "expired without delivery" signal.
+- **No catch-up for `envelope:delivered`/`conversation:read`/`presence:update`.** All three are
+  live-only signaling with no persistence (`docs/ADR/0011-presence-and-receipts.md`) — a device
+  offline at the moment one fires simply doesn't receive it, ever, for that specific transition. A
+  conversation's `members` array still carries a presence *snapshot* (resolved fresh on every fetch),
+  so presence itself isn't permanently stale, but a delivery tick that was missed live has no
+  separate catch-up path.
 - **No server-side device-linking transfer.** `device-link:*` is signaling only — the actual history
   transfer happens over a direct WebRTC data channel between the two devices; the server never sees
   it, the same way it never sees a message body. A pairing session (Redis, 120s TTL) is deleted the

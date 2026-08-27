@@ -8,7 +8,7 @@ import type { env as Env } from "../../env.js";
 import { createDownloadUrl } from "../../lib/r2-client.js";
 import { resolvePrincipal } from "../../lib/principal.js";
 import { verifyAccessToken } from "../../lib/tokens.js";
-import { isConversationMember } from "./conversations.service.js";
+import { getDirectConversationOtherMember, isConversationMember } from "./conversations.service.js";
 import {
   cancelPairingSession,
   getPairingSession,
@@ -20,8 +20,9 @@ import {
   deviceLinkSignalSchema,
 } from "../devices/device-link.schemas.js";
 import { tryExtractR2Key } from "../media/media.service.js";
+import { getActiveDeviceIds, getActiveDeviceIdsForUsers, getConversationPartnerUserIds } from "../presence/presence.service.js";
 import { ackEnvelope, drainPendingTargets, sendEnvelope } from "./envelopes.service.js";
-import { envelopeAckSchema, messageSendSchema } from "./socket.schemas.js";
+import { conversationReadSchema, envelopeAckSchema, messageSendSchema } from "./socket.schemas.js";
 
 interface SocketData {
   userId: string;
@@ -42,6 +43,28 @@ export interface RegisterSocketHandlersOptions {
 
 function deviceRoom(deviceId: string): string {
   return `device:${deviceId}`;
+}
+
+// In-process presence state (docs/ADR/0011-presence-and-receipts.md) — deliberately not Redis or
+// Postgres. A user is "online" iff this set is non-empty; the single-process deployment this app
+// actually runs (ADR-0001, no clustering) makes this exact and free, unlike a TTL heartbeat that
+// would need to guess at staleness. Would need revisiting (a shared store, or a Redis-backed
+// Socket.IO adapter) if this server ever runs as more than one process.
+const onlineDevicesByUser = new Map<string, Set<string>>();
+
+// Exported for modules/relay/conversations.service.ts's attachMembers, which needs an online check
+// per member but has no reason to otherwise depend on this module's connection-handling internals.
+export function isUserOnline(userId: string): boolean {
+  return (onlineDevicesByUser.get(userId)?.size ?? 0) > 0;
+}
+
+async function broadcastPresence(io: Server, db: Db, userId: string, online: boolean, lastSeenAt: Date | null): Promise<void> {
+  const partnerUserIds = await getConversationPartnerUserIds(db, userId);
+  const targetDeviceIds = await getActiveDeviceIdsForUsers(db, partnerUserIds);
+  const payload = { userId, online, lastSeenAt: lastSeenAt?.toISOString() ?? null };
+  for (const targetDeviceId of targetDeviceIds) {
+    io.to(deviceRoom(targetDeviceId)).emit("presence:update", payload);
+  }
 }
 
 // A coarse per-connection cap on device-link:join attempts — defense in depth on top of the
@@ -91,7 +114,7 @@ async function authenticateSocket(
 }
 
 async function handleConnection(io: Server, db: Db, env: typeof Env, redis: Redis, r2: R2Context, socket: Socket): Promise<void> {
-  const { deviceId } = socket.data as SocketData;
+  const { userId, deviceId } = socket.data as SocketData;
 
   await socket.join(deviceRoom(deviceId));
 
@@ -99,6 +122,15 @@ async function handleConnection(io: Server, db: Db, env: typeof Env, redis: Redi
   const wasDormant = Boolean(device?.dormantAt);
 
   await db.update(devices).set({ lastSeenAt: new Date(), dormantAt: null }).where(eq(devices.id, deviceId));
+
+  // First device to connect for this user — they were fully offline until now (docs/ADR/0011).
+  const onlineDevices = onlineDevicesByUser.get(userId) ?? new Set<string>();
+  const wasOffline = onlineDevices.size === 0;
+  onlineDevices.add(deviceId);
+  onlineDevicesByUser.set(userId, onlineDevices);
+  if (wasOffline) {
+    void broadcastPresence(io, db, userId, true, null);
+  }
 
   if (wasDormant) {
     // docs/RETENTION.md §6 point 2 — the client turns this into the "dormancy return" gap notice.
@@ -117,7 +149,11 @@ async function handleConnection(io: Server, db: Db, env: typeof Env, redis: Redi
   });
 
   socket.on("envelope:ack", (payload: unknown) => {
-    void handleEnvelopeAck(db, r2, socket, payload);
+    void handleEnvelopeAck(io, db, r2, socket, payload);
+  });
+
+  socket.on("conversation:read", (payload: unknown) => {
+    void handleConversationRead(io, db, socket, payload);
   });
 
   let deviceLinkJoinAttempts = 0;
@@ -137,6 +173,25 @@ async function handleConnection(io: Server, db: Db, env: typeof Env, redis: Redi
   socket.on("device-link:cancel", (payload: unknown) => {
     void handleDeviceLinkCancel(io, redis, socket, payload);
   });
+
+  socket.on("disconnect", () => {
+    void handleDisconnect(io, db, userId, deviceId);
+  });
+}
+
+// The mirror image of the connect-time presence tracking above — updates lastSeenAt to reflect
+// actual last-active time (not just last-connect time, docs/ADR/0011) and, if this was the user's
+// last connected device, broadcasts them going offline.
+async function handleDisconnect(io: Server, db: Db, userId: string, deviceId: string): Promise<void> {
+  const now = new Date();
+  await db.update(devices).set({ lastSeenAt: now }).where(eq(devices.id, deviceId));
+
+  const onlineDevices = onlineDevicesByUser.get(userId);
+  onlineDevices?.delete(deviceId);
+  if (onlineDevices && onlineDevices.size === 0) {
+    onlineDevicesByUser.delete(userId);
+    await broadcastPresence(io, db, userId, false, now);
+  }
 }
 
 async function handleMessageSend(
@@ -180,13 +235,48 @@ async function handleMessageSend(
   }
 }
 
-async function handleEnvelopeAck(db: Db, r2: R2Context, socket: Socket, rawPayload: unknown): Promise<void> {
+async function handleEnvelopeAck(io: Server, db: Db, r2: R2Context, socket: Socket, rawPayload: unknown): Promise<void> {
   const { deviceId } = socket.data as SocketData;
 
   const parsed = envelopeAckSchema.safeParse(rawPayload);
   if (!parsed.success) return;
 
-  await ackEnvelope(db, { envelopeId: parsed.data.envelopeId, deviceId }, r2);
+  const result = await ackEnvelope(db, { envelopeId: parsed.data.envelopeId, deviceId }, r2);
+
+  // docs/ADR/0011-presence-and-receipts.md: fired to every one of the sender's own devices, not just
+  // the one that happened to trigger this — including devices that were dormant/offline just now
+  // (a Socket.IO emit to an unconnected room is a no-op, same as envelope:deliver's fan-out).
+  if (result.deliveredToAllRecipients && result.senderId) {
+    const senderDeviceIds = await getActiveDeviceIds(db, result.senderId);
+    for (const senderDeviceId of senderDeviceIds) {
+      io.to(deviceRoom(senderDeviceId)).emit("envelope:delivered", {
+        envelopeId: parsed.data.envelopeId,
+        conversationId: result.conversationId,
+      });
+    }
+  }
+}
+
+// Pure signaling relay, same posture as device-link:signal — no Postgres/Redis persistence
+// (docs/ADR/0011). Direct conversations only; the server never inspects throughSeq beyond the
+// schema's positive-integer check, since it has no envelope state to validate it against by the
+// time a user actually reads a message (the envelope is very likely already purged).
+async function handleConversationRead(io: Server, db: Db, socket: Socket, rawPayload: unknown): Promise<void> {
+  const { userId } = socket.data as SocketData;
+
+  const parsed = conversationReadSchema.safeParse(rawPayload);
+  if (!parsed.success) return;
+
+  const otherUserId = await getDirectConversationOtherMember(db, parsed.data.conversationId, userId);
+  if (!otherUserId) return;
+
+  const otherDeviceIds = await getActiveDeviceIds(db, otherUserId);
+  for (const otherDeviceId of otherDeviceIds) {
+    io.to(deviceRoom(otherDeviceId)).emit("conversation:read", {
+      conversationId: parsed.data.conversationId,
+      throughSeq: parsed.data.throughSeq,
+    });
+  }
 }
 
 // The new/empty device ("host") is already listening in its own deviceRoom (joined on connect,

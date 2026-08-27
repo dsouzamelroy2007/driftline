@@ -8,7 +8,7 @@ function conversation(overrides: Partial<Conversation>): Conversation {
 }
 
 function member(userId: string, displayName: string, avatarUrl: string | null = null): ConversationMemberSummary {
-  return { userId, displayName, avatarUrl };
+  return { userId, displayName, avatarUrl, online: false, lastSeenAt: null };
 }
 
 describe("conversationDisplayName", () => {

@@ -183,6 +183,80 @@ describe("retention: expiry sweep", () => {
   });
 });
 
+// docs/ADR/0011-presence-and-receipts.md: the delivery tick fires once every *recipient* target has
+// acked, independent of the sender's own other devices — otherwise an account with a second, often-
+// idle device could rarely see a delivered tick at all.
+describe("ackEnvelope: deliveredToAllRecipients (docs/ADR/0011)", () => {
+  it("is true as soon as the only recipient acks, in a plain two-party direct chat", async () => {
+    const sender = await seedUserAndDevice();
+    const recipient = await seedUserAndDevice();
+    const conversation = await seedConversation("direct", [sender.user.id, recipient.user.id]);
+
+    const { envelope } = await sendEnvelope(db, {
+      conversationId: conversation.id,
+      senderId: sender.user.id,
+      senderDeviceId: sender.device.id,
+      contentType: "text/plain",
+      payload: "aGVsbG8=",
+      retentionWindowDays: RETENTION_WINDOW_DAYS,
+    });
+
+    const result = await ackEnvelope(db, { envelopeId: envelope.id, deviceId: recipient.device.id }, fakeR2);
+
+    expect(result.deliveredToAllRecipients).toBe(true);
+    expect(result.senderId).toBe(sender.user.id);
+    expect(result.conversationId).toBe(conversation.id);
+  });
+
+  it("is true even while the sender's own second device hasn't acked yet, though purge hasn't happened", async () => {
+    const sender = await seedUserAndDevice();
+    // A second device for the same sender account gets its own EnvelopeTarget row too (ADR-0003 §1
+    // own-device sync) — full purge waits on it, but the delivery tick must not.
+    const [senderSecondDevice] = await db.insert(devices).values({ userId: sender.user.id, platform: "web" }).returning();
+    const recipient = await seedUserAndDevice();
+    const conversation = await seedConversation("direct", [sender.user.id, recipient.user.id]);
+
+    const { envelope } = await sendEnvelope(db, {
+      conversationId: conversation.id,
+      senderId: sender.user.id,
+      senderDeviceId: sender.device.id,
+      contentType: "text/plain",
+      payload: "bXVsdGktZGV2aWNl",
+      retentionWindowDays: RETENTION_WINDOW_DAYS,
+    });
+
+    const result = await ackEnvelope(db, { envelopeId: envelope.id, deviceId: recipient.device.id }, fakeR2);
+
+    expect(result.purged).toBe(false); // the sender's second device target is still pending
+    expect(result.deliveredToAllRecipients).toBe(true); // but every *recipient* already has it
+    expect(await envelopeExists(envelope.id)).toBe(true);
+
+    // Cleanup isn't the point of this test, but leaving a dangling pending target for another test's
+    // shared conversation setup would be a footgun if this file's tests ever start sharing fixtures.
+    await ackEnvelope(db, { envelopeId: envelope.id, deviceId: senderSecondDevice!.id }, fakeR2);
+  });
+
+  it("is false while at least one recipient (in a group) still hasn't acked", async () => {
+    const sender = await seedUserAndDevice();
+    const memberB = await seedUserAndDevice();
+    const memberC = await seedUserAndDevice();
+    const conversation = await seedConversation("group", [sender.user.id, memberB.user.id, memberC.user.id]);
+
+    const { envelope } = await sendEnvelope(db, {
+      conversationId: conversation.id,
+      senderId: sender.user.id,
+      senderDeviceId: sender.device.id,
+      contentType: "text/plain",
+      payload: "cGFydGlhbA==",
+      retentionWindowDays: RETENTION_WINDOW_DAYS,
+    });
+
+    const result = await ackEnvelope(db, { envelopeId: envelope.id, deviceId: memberB.device.id }, fakeR2);
+
+    expect(result.deliveredToAllRecipients).toBe(false);
+  });
+});
+
 describe("retention: device revocation", () => {
   it("purges an envelope whose last pending target is removed by revocation", async () => {
     const sender = await seedUserAndDevice();

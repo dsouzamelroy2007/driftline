@@ -29,6 +29,10 @@ export interface ConversationMemberSummary {
   userId: string;
   displayName: string;
   avatarUrl: string | null;
+  // Phase 6 part 5 (docs/ADR/0011-presence-and-receipts.md) — a snapshot as of the fetch; live
+  // updates arrive over the socket as presence:update while a client stays connected.
+  online: boolean;
+  lastSeenAt: string | null;
 }
 
 export type ConversationType = "direct" | "group";

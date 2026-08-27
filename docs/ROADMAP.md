@@ -63,10 +63,11 @@ rather than colliding with Phase 7's already-planned "Deployment & live demo" sc
   see [ADR-0010](ADR/0010-profile-pictures.md) for why (short version: no new public R2 bucket, a
   dual-shape `avatarUrl` resolved server-side, a long-lived presigned GET instead of message-media's
   short one).
-- **Part 5 — presence: read receipts, delivery/read ticks, last seen.** The biggest of the four —
-  new relay event(s) and a presence data model on top of the Redis TTL rows `docs/RETENTION.md` §2
-  already reserves for this. Likely needs its own ADR. Parts 3–4 come first so this — the part most
-  likely to need a design iteration — isn't blocked behind smaller, unrelated work.
+- **Part 5 — presence: read receipts, delivery/read ticks, last seen — DONE (2026-08-27).** The
+  biggest of the four, as expected — three new relay events, written up in
+  [ADR-0011](ADR/0011-presence-and-receipts.md). Live-only, no new persistence; "online" turned out
+  to be free from Socket.IO's own connection state in this single-process deployment, superseding
+  the Redis-heartbeat plan `docs/RETENTION.md` §2 originally sketched.
 - **Part 6 — UI polish pass.** Deliberately last: read ticks, avatars, and last-seen all add UI
   surface that a polish pass should style once rather than redo. Direction from the user (2026-08-27):
   more visual richness and better information hierarchy, blending Signal's restrained/high-contrast

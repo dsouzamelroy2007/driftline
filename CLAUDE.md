@@ -154,11 +154,12 @@ GitHub's `oauth/github.service.ts`, deferred).
 
 Relay (Phase 3, `apps/server/src/modules/relay/`, full contract in `docs/REALTIME_PROTOCOL.md`):
 `POST /conversations`, `GET /conversations` (direct + group, ≤100 members; each conversation now
-also carries a `members: {userId, displayName, avatarUrl}[]` array, added in Phase 5 since the web
-client has no other way to render a conversation's name — `conversations` itself still has no `name`
-column, so a group's display name is derived client-side by joining member names;
-`apps/web/lib/conversation-name.ts` — `avatarUrl` added Phase 6 part 4, resolved server-side the
-same way `/me`'s is). Socket.IO: handshake auth via the same access-token
+also carries a `members: {userId, displayName, avatarUrl, online, lastSeenAt}[]` array, added in
+Phase 5 since the web client has no other way to render a conversation's name — `conversations`
+itself still has no `name` column, so a group's display name is derived client-side by joining
+member names; `apps/web/lib/conversation-name.ts` — `avatarUrl` added Phase 6 part 4, resolved
+server-side the same way `/me`'s is; `online`/`lastSeenAt` added Phase 6 part 5 as a presence
+snapshot, see below). Socket.IO: handshake auth via the same access-token
 verification path as HTTP; `message:send` (ack-callback with `{envelopeId, seq}`), `envelope:deliver`
 (server → client), `envelope:ack` (client → server, the hot path that triggers the transactional
 purge), `dormancy:return` (gap-notice signal on reconnect). Phase 6 added device linking
@@ -173,16 +174,21 @@ export/import). Purge paths: ack-triggered (same transaction, `SELECT ... FOR UP
 concurrent acks on one envelope — see `modules/relay/purge.ts`), expiry sweeper, and device
 revocation, all logging `envelope_purged_total{reason}` with envelope ID + size only. Expiry sweeper
 and dormancy sweep run as in-process `setInterval`s (every 5 min), not a separate
-`infra/scripts/sweeper` — revisit only if this needs to move out-of-process (Phase 8/9). Not built:
-presence, typing indicators, read receipts — `docs/RETENTION.md` §2 already reserves Redis TTL rows
-for presence/typing, but no relay event for either was ever implemented (checked directly against
-`modules/relay/socket.ts` during Phase 5); the web UI only shows sent/delivered, derived from ack.
+`infra/scripts/sweeper` — revisit only if this needs to move out-of-process (Phase 8/9).
 Phase 6 part 2b added media attachments (`docs/ADR/0009-media-attachments.md`): a new
 `modules/media/` (upload-URL endpoint, `tryExtractR2Key`/`cleanupPurgedMedia`) and
 `lib/r2-client.ts` (`@aws-sdk/client-s3` presigned PUT/GET/delete). All three purge paths
 (ack/sweeper/revocation) now delete a purged envelope's R2 object too, post-commit only — see
-Status below. Not built: presence, typing indicators, read receipts, thumbnails, generic (non-image)
-file attachments.
+Status below. Phase 6 part 5 added presence/receipts (`docs/ADR/0011-presence-and-receipts.md`):
+`envelope:delivered` (server → sender's devices), `conversation:read` (bidirectional, direct
+conversations only), `presence:update` (server → a user's conversation partners) — a new
+`modules/presence/` (`getActiveDeviceIds`/`getConversationPartnerUserIds`/
+`getActiveDeviceIdsForUsers`), `isUserOnline` exported from `modules/relay/socket.ts` (in-process
+`Map<userId, Set<deviceId>>`, not Redis — supersedes the heartbeat `docs/RETENTION.md` §2 originally
+planned), and `devices.lastSeenAt` now updated on disconnect as well as connect. All three are
+live-only, no persistence — see ADR-0011 for the accepted-gap reasoning. Not built: typing
+indicators (deliberately out of Part 5's scope, see ADR-0011), thumbnails, generic (non-image) file
+attachments.
 
 ## Working agreement reminders
 
@@ -481,10 +487,33 @@ Items 2–6 are now sequenced as **Phase 6, parts 3–6** — full rationale and
    account) — rendered correctly, no "Image not available". Device-linking's WebRTC path wasn't
    separately live-verified this round (same unchanged plaintext model, already covered by the
    chunker unit test), only the file export/import path.
-3. **Part 5 — read receipts, delivery/read ticks, last seen.** New relay event(s) + a presence data
-   model on top of the Redis TTL rows `docs/RETENTION.md` §2 already reserves. User asked for a
-   non-blue "read" tick color specifically, to avoid the exact WhatsApp look. Likely needs its own
-   ADR.
+3. **Part 5 — DONE (2026-08-27).** Read receipts, delivery/read ticks, last seen. Written up as
+   [ADR-0011](docs/ADR/0011-presence-and-receipts.md) — short version: everything here is live-only,
+   no new Postgres/Redis persistence (a device offline at the exact moment a tick/read/presence
+   transition happens just misses it — accepted, documented, same "narrow race" posture as several
+   earlier ADRs). Three new Socket.IO events (`docs/REALTIME_PROTOCOL.md`): `envelope:delivered`
+   (server → every one of the sender's own active devices, fired once every *recipient* target has
+   acked — checked independently of full purge, since purge also waits on the sender's own other
+   devices, which would otherwise make the tick rarely fire for multi-device accounts);
+   `conversation:read` (bidirectional, direct conversations only — a `throughSeq` watermark, not a
+   per-message flag, so one event self-heals past any earlier missed one); `presence:update` (server
+   → every device of every user sharing a conversation with the affected user, on their online device
+   count crossing zero either way). "Online" is in-process state in `modules/relay/socket.ts`
+   (`isUserOnline`), *not* the Redis TTL heartbeat `docs/RETENTION.md` §2 originally sketched — this
+   single-process deployment already gets that for free from Socket.IO's own connection state, a
+   divergence ADR-0011 documents explicitly. `devices.lastSeenAt` (existing column, no schema change)
+   is now updated on disconnect too, not just connect. `GET`/`POST /conversations`'s `members` array
+   gained `online`/`lastSeenAt` alongside Part 4's `avatarUrl`. Client state lives entirely in
+   `apps/web/app/chat/[id]/page.tsx` via the raw `socket` `sync-context.tsx` already exposes for
+   exactly this ("features that need to speak directly to the server over events sync-engine doesn't
+   own") — none of it touches `packages/sync-engine` or `packages/local-store`, since it's ephemeral
+   UI state, not part of the durable local-first model. Read tick color is `text-status-online`
+   (green), deliberately not blue, per the user's explicit ask. New unit/integration tests cover the
+   `deliveredToAllRecipients` logic (including the specific multi-device-sender scenario ADR-0011
+   calls out) and the new `modules/presence/presence.service.ts` helpers; live-verified with
+   Playwright end-to-end — watched a message's tick progress ✓ → ✓✓ (white) → ✓✓ (green) as the
+   recipient opened the thread, and watched the sender's header live-update from "Online" to "Last
+   seen just now" the instant the recipient's tab closed.
 4. **Part 4 — DONE (2026-08-27).** Profile pictures. `users.avatarUrl` was already partially in use
    (GitHub OAuth signups get GitHub's own public CDN URL stored verbatim) — self-uploaded avatars
    needed a design decision the original one-line plan undersold, written up as
