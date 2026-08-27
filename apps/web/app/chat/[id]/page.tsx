@@ -16,7 +16,7 @@ import { Avatar } from "../../../components/avatar";
 import { RequireAuth } from "../../../components/auth-gate";
 import { listConversations } from "../../../lib/api-client";
 import { useAuth } from "../../../lib/auth-context";
-import { conversationAvatarUrl, conversationDisplayName } from "../../../lib/conversation-name";
+import { conversationAvatarSeed, conversationAvatarUrl, conversationDisplayName } from "../../../lib/conversation-name";
 import { uploadAttachment, validateAttachmentFile } from "../../../lib/attachment-upload";
 import { formatLastSeen } from "../../../lib/format-last-seen";
 import { useLocalStore } from "../../../lib/local-store-context";
@@ -335,7 +335,13 @@ function ThreadContent() {
           ←
         </Link>
         {conversation && user && (
-          <Avatar name={conversationDisplayName(conversation, user.id)} avatarUrl={conversationAvatarUrl(conversation, user.id)} size="sm" />
+          <Avatar
+            name={conversationDisplayName(conversation, user.id)}
+            avatarUrl={conversationAvatarUrl(conversation, user.id)}
+            seed={conversationAvatarSeed(conversation, user.id)}
+            online={Boolean(isDirect && presence?.online)}
+            size="sm"
+          />
         )}
         <div className="min-w-0 flex-1">
           <h1 className="truncate font-medium text-text-primary">

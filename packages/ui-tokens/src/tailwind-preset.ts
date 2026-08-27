@@ -20,6 +20,12 @@ export const tailwindPreset = {
         "text-muted": "var(--color-text-muted)",
         "status-online": "var(--color-status-online)",
         "status-error": "var(--color-status-error)",
+        "avatar-1": "var(--color-avatar-1)",
+        "avatar-2": "var(--color-avatar-2)",
+        "avatar-3": "var(--color-avatar-3)",
+        "avatar-4": "var(--color-avatar-4)",
+        "avatar-5": "var(--color-avatar-5)",
+        "avatar-6": "var(--color-avatar-6)",
       },
       borderRadius: {
         bubble: radiusTokens.bubble,

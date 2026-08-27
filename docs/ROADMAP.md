@@ -68,10 +68,13 @@ rather than colliding with Phase 7's already-planned "Deployment & live demo" sc
   [ADR-0011](ADR/0011-presence-and-receipts.md). Live-only, no new persistence; "online" turned out
   to be free from Socket.IO's own connection state in this single-process deployment, superseding
   the Redis-heartbeat plan `docs/RETENTION.md` §2 originally sketched.
-- **Part 6 — UI polish pass.** Deliberately last: read ticks, avatars, and last-seen all add UI
-  surface that a polish pass should style once rather than redo. Direction from the user (2026-08-27):
-  more visual richness and better information hierarchy, blending Signal's restrained/high-contrast
-  bubble language with some of Telegram's denser, more colorful chrome.
+- **Part 6 — UI polish pass — DONE (2026-08-27).** Deliberately last, so it styled the new tick/
+  avatar/last-seen surface once rather than redoing it. Direction (Signal restraint + Telegram's
+  denser, more colorful chrome) drafted as a design canvas and approved before implementation — see
+  `docs/UI_DIRECTION.md`'s "Phase 6 part 6 revision". Two changes: a deepened `accent.primary`, and a
+  six-color per-contact avatar palette replacing the single flat accent circle every fallback avatar
+  used to be. All six items from the 2026-08-27 manual test pass are now closed — Phase 6 in full is
+  done.
 
 Phases 5 and 6 both depend on Phase 4 and can interleave somewhat (backup/search UI in Phase 6 needs
 some of Phase 5's shell), but Phase 3 must be fully done and correct before either starts — the relay

@@ -444,10 +444,11 @@ Also still open: the presence/typing/read-receipt gap and the deferred custom-gr
 change noted in Phase 5, revisit if either becomes worth prioritizing. Phase 6 (all parts) is now
 complete.
 
-## Phase 6 parts 3–6 (from a user manual test pass, 2026-08-27)
+## Phase 6 parts 3–6 (from a user manual test pass, 2026-08-27) — ALL DONE
 
-The user ran the full Phase 6 feature set live (per the walkthrough above) and reported six items.
-Sequenced into Phase 6 parts 3–6 (`docs/ROADMAP.md`) rather than a new phase — see that doc for why.
+The user ran the full Phase 6 feature set live (per the walkthrough above) and reported six items,
+now all closed as of Part 6 completing 2026-08-27. Sequenced into Phase 6 parts 3–6
+(`docs/ROADMAP.md`) rather than a new phase — see that doc for why.
 
 1. **CLOSED, not a code defect (2026-08-27).** The leading hypothesis was confirmed: the running
    `pnpm dev` process was two days stale (started 2026-08-25, long since stopped responding on any
@@ -537,7 +538,21 @@ Items 2–6 are now sequenced as **Phase 6, parts 3–6** — full rationale and
    account's own Settings page, and confirmed a second account's Inbox row and Thread header both
    show that photo (the "other member's avatar" case, `conversationAvatarUrl`) — not just the
    fallback initials it showed before the upload.
-5. **Part 6 — UI polish pass**, last on purpose (styles the new tick/avatar/last-seen surface once).
-   Direction from the user (2026-08-27): more visual richness + better information hierarchy,
-   blending Signal's restrained/high-contrast bubble language with some of Telegram's denser, more
-   colorful chrome.
+5. **Part 6 — DONE (2026-08-27).** UI polish pass, last on purpose (styled the new tick/avatar/
+   last-seen surface once, rather than redoing it). Direction drafted as a design canvas first
+   (Signal restraint + Telegram's denser, more colorful chrome, per the user's brief) and approved
+   before any code changed — see `docs/UI_DIRECTION.md`'s "Phase 6 part 6 revision" section for the
+   full writeup. Two changes: `accent.primary` deepened (same hue, more chroma — every existing
+   `bg-accent-primary` usage picked this up for free via the CSS custom property, no component
+   touched for this half), and a six-color avatar palette replacing the single flat accent circle
+   every fallback initial-letter avatar used to be (`apps/web/components/avatar.tsx`, hashed per
+   contact). Also added: a small online-dot on avatars and an Inbox-row timestamp — both flagged as
+   layout additions alongside the color work when the direction was proposed, not silently bundled.
+
+   Two real bugs found building this, both in `apps/web/tailwind.config.ts`/`avatar.tsx`, neither
+   caught until live verification: the Tailwind `content` glob only ever scanned `./app/**`, so the
+   new `bg-avatar-*` classes (only ever written in `components/`) were never generated at all —
+   every fallback avatar silently rendered with no background color. Separately, the palette lookup
+   itself first built a class name from a template string, which Tailwind's static scanner can never
+   see regardless of the content glob. Both fixed; confirmed live with two real accounts rendering
+   two visibly different avatar colors, the deepened accent throughout, and the new timestamp/dot.

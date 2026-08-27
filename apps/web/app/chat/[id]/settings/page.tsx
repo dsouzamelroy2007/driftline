@@ -54,7 +54,7 @@ function ConversationSettingsContent() {
               key={member.userId}
               className="flex items-center gap-3 rounded-control bg-bg-surface-raised px-3 py-2 text-sm text-text-primary"
             >
-              <Avatar name={member.displayName} avatarUrl={member.avatarUrl} size="sm" />
+              <Avatar name={member.displayName} avatarUrl={member.avatarUrl} seed={member.userId} online={member.online} size="sm" />
               {member.displayName} {member.userId === user?.id && <span className="text-text-muted">(you)</span>}
             </li>
           ))}

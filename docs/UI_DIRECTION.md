@@ -76,7 +76,8 @@ boundary.
 
 ## 5. Design tokens
 
-Starting point for `packages/ui-tokens` (Phase 1); refined, not re-litigated, once implemented.
+Starting point for `packages/ui-tokens` (Phase 1); revised once, in Phase 6 part 6 (the UI polish
+pass — see below), otherwise stable since.
 
 **Palette intent:** cool, low-saturation base (evokes "quiet, private, temporary") with one warm
 accent reserved specifically for retention/expiry UI (the countdown, the purge visualiser) so that
@@ -88,18 +89,57 @@ recolored badge.
 | `color.bg.base` | `#FAFAF9` | `#0F1216` | App background |
 | `color.bg.surface` | `#FFFFFF` | `#171B21` | Cards, panes, composer |
 | `color.bg.surface-raised` | `#F1F1EF` | `#20252C` | Bubbles (incoming) |
-| `color.accent.primary` | `#2E5F73` (muted teal-slate) | `#5FA3BD` | Primary actions, sent-bubble, links |
+| `color.accent.primary` | `#146B82` (deepened teal, was `#2E5F73`) | `#52B8D9` (was `#5FA3BD`) | Primary actions, sent-bubble, links |
 | `color.accent.retention` | `#B8763E` (warm amber-brown) | `#D9925A` | Expiry countdowns, purge visualiser, dormancy warnings — reserved, not reused elsewhere |
 | `color.text.primary` | `#1B1E22` | `#EDEFF2` | Body text |
 | `color.text.muted` | `#6B7078` | `#8B919B` | Timestamps, metadata |
-| `color.status.online` | `#3E9469` | `#4FBF83` | Presence dot |
+| `color.status.online` | `#3E9469` | `#4FBF83` | Presence dot, read-tick color (Phase 6 part 5) |
 | `color.status.error` | `#C4483A` | `#E0685A` | Errors, failed sends, revoke actions |
+| `color.avatar.1`–`.6` | `#146B82 #5457A6 #8B4E82 #A2455F #3E7A5B #47607A` | `#52B8D9 #8385D6 #B87CAE #D9748F #6BAE87 #7A97B3` | Fallback initial-letter avatar fill, hashed per contact (Phase 6 part 6) |
 | `radius.bubble` | `18px` | same | Message bubbles |
 | `radius.control` | `10px` | same | Buttons, inputs |
 | type scale | `13/15/17/20/24/30` px, one family (system-ui stack + fallback to Inter) | same | Consistent across web/native via `ui-tokens` → Tailwind preset + NativeWind |
 
 Theme resolves `prefers-color-scheme` by default, overridable per-session; no flash-of-wrong-theme on
 load (SSR-resolved on web, stored preference read before first paint on native).
+
+### Phase 6 part 6 revision (UI polish pass, added 2026-08-27)
+
+User feedback on the shipped UI was that it read as "dull." Direction (drafted as a design canvas,
+reviewed and approved before implementation): keep every structural token — radii, type scale, the
+retention amber's reserved status — and address "dull" with exactly two changes.
+
+1. **`accent.primary` deepened**, same hue family, more chroma, so it reads as a deliberate color
+   choice rather than washed-out slate. Every existing `bg-accent-primary`/`text-accent-primary`
+   usage picked this up automatically via the CSS custom property in `apps/web/app/globals.css` —
+   no component changed for this half of the revision.
+2. **A six-color avatar palette**, chroma/lightness-matched to each other and deliberately clear of
+   the amber/orange band `accent.retention` occupies (a colored avatar must never look like a
+   retention cue). `apps/web/components/avatar.tsx` hashes a stable per-contact seed (the other
+   member's user id for a direct chat, the conversation id for a group) onto one of six literal
+   Tailwind classes — every fallback initial-letter circle used to be the same flat
+   `accent.primary`, which is exactly the kind of flat sameness that made scanning the Inbox feel
+   dull in the first place.
+
+Two real bugs surfaced getting this far, both fixed:
+
+- `apps/web/tailwind.config.ts`'s `content` glob only ever scanned `./app/**` — `bg-avatar-1`
+  through `bg-avatar-6` are only ever written in `components/avatar.tsx`, so Tailwind's scanner had
+  never seen those class names and generated no CSS for any of them at all. Every fallback avatar
+  silently rendered with no background color. Fixed by widening `content` to also cover
+  `./components/**` and `./lib/**` (the latter was already working only by the coincidence of
+  `lib/ui-classes.ts`'s class strings happening to also appear literally inside `app/**/*.tsx`
+  files — not something to keep relying on).
+- The palette lookup itself first used a template-built class name (`` `bg-avatar-${n}` ``), which
+  Tailwind's static scanner can never see regardless of the `content` glob (it only recognizes
+  literal class-name substrings in source). Fixed by indexing into a literal array of the six full
+  class-name strings instead.
+
+Also added while wiring the palette through: a small online/offline presence dot on the avatar
+itself (Inbox rows, Thread header, conversation member list — direct contacts only, same
+`docs/ADR/0011` presence data), and an Inbox-row timestamp (`apps/web/lib/format-inbox-timestamp.ts`)
+that wasn't in the original Phase 5 design — flagged as a layout addition alongside the color-only
+work when the direction was proposed, not something silently bundled in.
 
 ## 6. Motion principles
 

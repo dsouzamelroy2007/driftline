@@ -58,7 +58,7 @@ function AvatarSection() {
 
   return (
     <div className="flex flex-col items-center gap-3">
-      <Avatar name={user.displayName} avatarUrl={user.avatarUrl} size="lg" />
+      <Avatar name={user.displayName} avatarUrl={user.avatarUrl} seed={user.id} size="lg" />
       <input
         ref={fileInputRef}
         type="file"

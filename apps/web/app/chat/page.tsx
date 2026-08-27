@@ -9,7 +9,8 @@ import { Avatar } from "../../components/avatar";
 import { RequireAuth } from "../../components/auth-gate";
 import { listConversations } from "../../lib/api-client";
 import { useAuth } from "../../lib/auth-context";
-import { conversationAvatarUrl, conversationDisplayName } from "../../lib/conversation-name";
+import { conversationAvatarSeed, conversationAvatarUrl, conversationDisplayName, conversationOnline } from "../../lib/conversation-name";
+import { formatInboxTimestamp } from "../../lib/format-inbox-timestamp";
 import { useLocalStore } from "../../lib/local-store-context";
 import { hasSeenOnboarding } from "../../lib/onboarding";
 import { getLastReadId } from "../../lib/read-state";
@@ -148,6 +149,8 @@ function InboxContent() {
                     <Avatar
                       name={user ? conversationDisplayName(conversation, user.id) : "…"}
                       avatarUrl={user ? conversationAvatarUrl(conversation, user.id) : null}
+                      seed={user ? conversationAvatarSeed(conversation, user.id) : conversation.id}
+                      online={user ? conversationOnline(conversation, user.id) : false}
                     />
                     <div className="min-w-0">
                       <p className="truncate font-medium text-text-primary">
@@ -156,11 +159,14 @@ function InboxContent() {
                       <p className="truncate text-sm text-text-muted">{preview?.text ?? "…"}</p>
                     </div>
                   </div>
-                  {preview && preview.unreadCount > 0 && (
-                    <span className="shrink-0 rounded-full bg-accent-primary px-2 py-0.5 text-xs font-medium text-white">
-                      {preview.unreadCount > 99 ? "99+" : preview.unreadCount}
-                    </span>
-                  )}
+                  <div className="flex shrink-0 flex-col items-end gap-1.5">
+                    {preview && <p className="text-xs text-text-muted">{formatInboxTimestamp(preview.createdAt)}</p>}
+                    {preview && preview.unreadCount > 0 && (
+                      <span className="flex min-w-5 items-center justify-center rounded-full bg-accent-primary px-1.5 py-0.5 text-xs font-medium text-white">
+                        {preview.unreadCount > 99 ? "99+" : preview.unreadCount}
+                      </span>
+                    )}
+                  </div>
                 </Link>
               </li>
             );

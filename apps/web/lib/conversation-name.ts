@@ -22,3 +22,23 @@ export function conversationAvatarUrl(conversation: Conversation, selfUserId: st
   const other = conversation.members.find((member) => member.userId !== selfUserId);
   return other?.avatarUrl ?? null;
 }
+
+// A stable id to hash the fallback avatar color from (docs/UI_DIRECTION.md §5, Phase 6 part 6) —
+// the other member's own id for a direct chat, so their color stays consistent everywhere they
+// appear; the conversation's own id for a group, since there's no single contact to key off (still
+// deterministic per group, just not tied to a person).
+export function conversationAvatarSeed(conversation: Conversation, selfUserId: string): string {
+  if (conversation.type === "direct") {
+    const other = conversation.members.find((member) => member.userId !== selfUserId);
+    if (other) return other.userId;
+  }
+  return conversation.id;
+}
+
+// Only meaningful for a direct chat — same reasoning as conversationAvatarUrl. A group's "online"
+// state has no single answer, so this stays undefined rather than picking an arbitrary member.
+export function conversationOnline(conversation: Conversation, selfUserId: string): boolean {
+  if (conversation.type !== "direct") return false;
+  const other = conversation.members.find((member) => member.userId !== selfUserId);
+  return other?.online ?? false;
+}

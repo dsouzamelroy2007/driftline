@@ -90,7 +90,7 @@ function NewChatContent() {
           {participants.map((participant) => (
             <li key={participant.id} className="flex items-center justify-between rounded-control bg-bg-surface-raised px-3 py-2 text-sm">
               <span className="flex items-center gap-2">
-                <Avatar name={participant.displayName} avatarUrl={participant.avatarUrl} size="sm" />
+                <Avatar name={participant.displayName} avatarUrl={participant.avatarUrl} seed={participant.id} size="sm" />
                 {participant.displayName} <span className="text-text-muted">({participant.email})</span>
               </span>
               <button
