@@ -36,9 +36,17 @@ const PAGE_SIZE = 50;
 // Mirrors apps/server's modules/media/media.service.ts allowlist (docs/ADR/0009-media-attachments.md).
 const IMAGE_CONTENT_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
+// image/jpeg -> jpg, etc. — only ever called with an already-allowlisted contentType (IMAGE_CONTENT_TYPES).
+function extensionForContentType(contentType: string): string {
+  const subtype = contentType.split("/")[1] ?? "bin";
+  return subtype === "jpeg" ? "jpg" : subtype;
+}
+
 // Reconstructs a displayable image from the locally-cached base64 bytes (either downloaded from R2
 // at delivery time, or the sender's own file at compose time) via an object URL — never a giant
-// inline data: URI. Revoked on unmount/change so the browser can reclaim the memory.
+// inline data: URI. Revoked on unmount/change so the browser can reclaim the memory. The download
+// link below reuses the same object URL — there was previously no way at all to save a received
+// image to disk, only to view it inline.
 function AttachmentImage({ contentType, base64 }: { contentType: string; base64: string }) {
   const [url, setUrl] = useState<string | null>(null);
 
@@ -58,8 +66,19 @@ function AttachmentImage({ contentType, base64 }: { contentType: string; base64:
   }, [contentType, base64]);
 
   if (!url) return <p className="italic opacity-80">Image not available</p>;
-  // An object: URL — next/image can't handle it, same reasoning as lib/qr-code.tsx's plain <img>.
-  return <img src={url} alt="Attachment" className="max-h-80 max-w-full rounded-control object-contain" />;
+  return (
+    <div className="flex flex-col items-start gap-1">
+      {/* An object: URL — next/image can't handle it, same reasoning as lib/qr-code.tsx's plain <img>. */}
+      <img src={url} alt="Attachment" className="max-h-80 max-w-full rounded-control object-contain" />
+      <a
+        href={url}
+        download={`attachment.${extensionForContentType(contentType)}`}
+        className="text-xs text-inherit underline underline-offset-2 opacity-80 hover:opacity-100"
+      >
+        Download
+      </a>
+    </div>
+  );
 }
 
 function GapOrSystemNotice({ entry }: { entry: TimelineEntry }) {

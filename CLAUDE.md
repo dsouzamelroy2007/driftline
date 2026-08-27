@@ -556,3 +556,14 @@ Items 2–6 are now sequenced as **Phase 6, parts 3–6** — full rationale and
    itself first built a class name from a template string, which Tailwind's static scanner can never
    see regardless of the content glob. Both fixed; confirmed live with two real accounts rendering
    two visibly different avatar colors, the deepened accent throughout, and the new timestamp/dot.
+
+**Follow-up from the user's own end-to-end pass, 2026-08-28: recipients had no way to save a
+received image attachment.** Not a regression from any of the six items above — this gap existed
+since media attachments first shipped (Phase 6 part 2b); it just hadn't been noticed until someone
+tried to actually save one. `AttachmentImage` (`apps/web/app/chat/[id]/page.tsx`) only ever rendered
+the object URL inline via `<img>`, with no download affordance at all. Fixed by adding a small
+"Download" link right under the image, `<a href={url} download="attachment.{ext}">`, reusing the
+same blob object URL the `<img>` already holds — no new fetch, no new local-store read. Applies to
+every bubble that can show an image (sender's own, incoming, and the optimistic outbox bubble) since
+they all go through the same `AttachmentImage` component. Live-verified with Playwright: a real file
+saved by the receiver is byte-identical to the original upload.
