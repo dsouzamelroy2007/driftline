@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 import { createDbClient, users, type Db } from "@driftline/db";
+import type { S3Client } from "@aws-sdk/client-s3";
 import { beforeAll, describe, expect, it } from "vitest";
 
+import type { R2Context } from "../../plugins/app-context.js";
 import { createConversation, listConversationsForUser } from "./conversations.service.js";
 
 function requireTestDatabaseUrl(): string {
@@ -14,6 +16,9 @@ function requireTestDatabaseUrl(): string {
 }
 
 let db: Db;
+// Never actually called: these seeded users have no avatarUrl, so resolveAvatarUrl short-circuits
+// on null before touching the client/bucket at all.
+const r2: R2Context = { client: {} as S3Client, bucket: "test-bucket" };
 
 beforeAll(() => {
   db = createDbClient(requireTestDatabaseUrl());
@@ -29,7 +34,7 @@ describe("conversations members", () => {
     const creator = await seedUser("Alice");
     const participant = await seedUser("Bob");
 
-    const conversation = await createConversation(db, {
+    const conversation = await createConversation(db, r2, {
       type: "direct",
       creatorId: creator.id,
       participantUserIds: [participant.id],
@@ -42,9 +47,9 @@ describe("conversations members", () => {
   it("includes members on every conversation returned by listConversationsForUser", async () => {
     const creator = await seedUser("Carol");
     const participant = await seedUser("Dave");
-    await createConversation(db, { type: "direct", creatorId: creator.id, participantUserIds: [participant.id] });
+    await createConversation(db, r2, { type: "direct", creatorId: creator.id, participantUserIds: [participant.id] });
 
-    const listed = await listConversationsForUser(db, creator.id);
+    const listed = await listConversationsForUser(db, r2, creator.id);
 
     expect(listed.length).toBeGreaterThan(0);
     for (const conversation of listed) {

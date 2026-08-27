@@ -88,8 +88,13 @@ export function getMe(accessToken: string): Promise<{ user: User }> {
   return request("/me", authed(accessToken));
 }
 
-export function updateProfile(accessToken: string, displayName: string): Promise<{ user: User }> {
-  return request("/me", { method: "PATCH", body: JSON.stringify({ displayName }), ...authed(accessToken) });
+// avatarUrl: pass a freshly-uploaded r2Key to set it, null to remove the current avatar, or omit
+// entirely to leave it unchanged (docs/ADR/0010-profile-pictures.md).
+export function updateProfile(
+  accessToken: string,
+  input: { displayName: string; avatarUrl?: string | null },
+): Promise<{ user: User }> {
+  return request("/me", { method: "PATCH", body: JSON.stringify(input), ...authed(accessToken) });
 }
 
 export function lookupUserByEmail(accessToken: string, email: string): Promise<{ user: User }> {
@@ -130,4 +135,11 @@ export function requestUploadUrl(
   input: { contentType: string; size: number },
 ): Promise<{ uploadUrl: string; r2Key: string }> {
   return request("/media/upload-url", { method: "POST", body: JSON.stringify(input), ...authed(accessToken) });
+}
+
+export function requestAvatarUploadUrl(
+  accessToken: string,
+  input: { contentType: string; size: number },
+): Promise<{ uploadUrl: string; r2Key: string }> {
+  return request("/me/avatar/upload-url", { method: "POST", body: JSON.stringify(input), ...authed(accessToken) });
 }

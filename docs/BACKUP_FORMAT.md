@@ -45,6 +45,7 @@ A `.json` file containing one object:
           "seq": 1,
           "contentType": "text/plain",
           "payload": "<base64, opaque — same as the server's envelopes.payload>",
+          "attachmentPayload": "<base64, optional — only for a media message this device has the cached bytes for>",
           "createdAt": 1735689600000
         }
       ]
@@ -59,6 +60,12 @@ exported. `cursorSeq` is the conversation's `conversation_cursors.lastSeenSeq` a
 so import can advance the target device's cursor correctly (see §4). `createdAt` is epoch
 milliseconds, not an ISO string, so the whole payload round-trips through `JSON.parse`/`JSON.stringify`
 without a custom reviver.
+
+`attachmentPayload` (added Phase 6 part 3, docs/ADR/0009-media-attachments.md) carries a media
+message's locally-cached image bytes, base64, straight from `timeline_entries.attachment_payload` —
+present only when this specific device still has them (it's a local-only cache, never round-tripped
+through the server, and the source R2 object may already be purged by the time of export). Omitted
+entirely for a text message, or for a media message this device never downloaded/no longer has.
 
 ## 3. The P2P wire format is a different, related thing
 

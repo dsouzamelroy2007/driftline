@@ -132,7 +132,10 @@ needs `NEXT_PUBLIC_SERVER_URL` (the server's own HTTP + Socket.IO origin). Run
 
 Auth API (all under `apps/server`, see ADR-0004 for the token model):
 `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /me`,
-`PATCH /me` (update `displayName`), `GET /users/lookup?email=` (exact-match lookup, powers Phase 5's
+`PATCH /me` (update `displayName`, and since Phase 6 part 4 an optional `avatarUrl` — an r2Key from
+the endpoint below, or `null` to remove; never a client-supplied external URL), `POST
+/me/avatar/upload-url` (authed, rate-limited — mints a presigned R2 PUT URL for a profile photo,
+5MB cap, `docs/ADR/0010-profile-pictures.md`), `GET /users/lookup?email=` (exact-match lookup, powers Phase 5's
 New Chat), `GET /me/storage` (`{envelopeCount, oldestExpiresAt}` — the "you currently have N
 messages held on our servers" widget, counts distinct envelopes via `envelope_targets` joined to
 `envelopes`, never touches payload), `GET /devices`, `DELETE /devices/:id` (revoke — now also
@@ -151,10 +154,11 @@ GitHub's `oauth/github.service.ts`, deferred).
 
 Relay (Phase 3, `apps/server/src/modules/relay/`, full contract in `docs/REALTIME_PROTOCOL.md`):
 `POST /conversations`, `GET /conversations` (direct + group, ≤100 members; each conversation now
-also carries a `members: {userId, displayName}[]` array, added in Phase 5 since the web client has
-no other way to render a conversation's name — `conversations` itself still has no `name` column,
-so a group's display name is derived client-side by joining member names;
-`apps/web/lib/conversation-name.ts`). Socket.IO: handshake auth via the same access-token
+also carries a `members: {userId, displayName, avatarUrl}[]` array, added in Phase 5 since the web
+client has no other way to render a conversation's name — `conversations` itself still has no `name`
+column, so a group's display name is derived client-side by joining member names;
+`apps/web/lib/conversation-name.ts` — `avatarUrl` added Phase 6 part 4, resolved server-side the
+same way `/me`'s is). Socket.IO: handshake auth via the same access-token
 verification path as HTTP; `message:send` (ack-callback with `{envelopeId, seq}`), `envelope:deliver`
 (server → client), `envelope:ack` (client → server, the hot path that triggers the transactional
 purge), `dormancy:return` (gap-notice signal on reconnect). Phase 6 added device linking
@@ -434,43 +438,77 @@ Also still open: the presence/typing/read-receipt gap and the deferred custom-gr
 change noted in Phase 5, revisit if either becomes worth prioritizing. Phase 6 (all parts) is now
 complete.
 
-## Next phase TODOs (user manual test pass, 2026-08-27)
+## Phase 6 parts 3–6 (from a user manual test pass, 2026-08-27)
 
-The user ran the full Phase 6 feature set live (per the walkthrough above) and reported six items,
-to be picked up in the next phase rather than this one:
+The user ran the full Phase 6 feature set live (per the walkthrough above) and reported six items.
+Sequenced into Phase 6 parts 3–6 (`docs/ROADMAP.md`) rather than a new phase — see that doc for why.
 
-1. **Bug: a sent image attachment rendered as "Unsupported message" on the receiver's side and
-   couldn't be opened.** Not reproduced/root-caused yet — do that first, don't assume the cause
-   below. Checked at report time: `IMAGE_CONTENT_TYPES`/`ALLOWED_CONTENT_TYPES`/
-   `MEDIA_CONTENT_TYPES` are byte-identical across `apps/web/app/chat/[id]/page.tsx`,
-   `apps/web/lib/attachment-upload.ts`, and `apps/server/src/modules/media/media.service.ts` — no
-   allowlist mismatch. Leading hypothesis, unconfirmed: the `apps/web` dev server had been running
-   continuously for over a day across dozens of hot-reloads during this session (it already needed
-   two full restarts for stale-bundle symptoms — 404s on its own JS chunks — while verifying parts
-   2a and 2b), so the browser may have been served a pre-media-feature bundle. Rule this in or out
-   with a *fresh* `pnpm dev` restart and a hard browser reload before treating it as a real logic
-   bug in the image-detection path.
-2. **"Image not available" after backup export/import.** This is not a new bug — it's the exact,
-   already-documented behavior from `docs/ADR/0009-media-attachments.md`'s Consequences section:
-   `packages/backup` (ADR-0007) and device-linking (ADR-0008) don't carry `attachmentPayload`
-   through their transfer yet, only the text descriptor. Closing this means wiring
-   `attachmentPayload` through `packages/backup`'s serialize/chunker models — `local-store`'s
-   `ImportEntryInput` already accepts the field, so it's a `packages/backup` change, not another
-   schema change.
-3. **Sent-message ticks (single/double) and read receipts.** Extends the long-standing documented
-   gap (`docs/RETENTION.md` §2 already reserves Redis TTL rows for presence/typing; no relay event
-   for delivery/read receipts exists yet — `modules/relay/socket.ts` only has ack, which the UI
-   already shows as sent/delivered). User asked for a non-blue color for the "read" tick state to
-   avoid the exact WhatsApp look.
-4. **"Last seen" not shown** for the other person in a conversation. Same presence-infrastructure
-   gap as above (Redis TTL heartbeat rows are reserved but no presence relay event or REST exposure
-   was ever built) — likely worth doing together with read receipts since both need the same
-   presence plumbing.
-5. **Profile pictures**: `users.avatarUrl` already exists in `packages/db`'s schema (present since
-   Phase 2, never populated or surfaced) — needs an upload flow (likely reusing the R2
-   presigned-upload pattern from ADR-0009, a public or long-TTL-presigned read path since avatars
-   aren't retention-sensitive the way message content is) plus UI in Settings/profile and the
-   Inbox/Thread member displays.
-6. **General UI polish** — user's word was "dull." No specifics given; worth a dedicated design
-   pass against `docs/UI_DIRECTION.md`'s token/motion intent rather than guessing at specifics
-   blind — ask for concrete examples/references at the start of that work.
+1. **CLOSED, not a code defect (2026-08-27).** The leading hypothesis was confirmed: the running
+   `pnpm dev` process was two days stale (started 2026-08-25, long since stopped responding on any
+   port at all by the time this was checked). A genuinely fresh `pnpm dev` plus a two-account
+   Playwright run (register both, direct chat, real image upload/download over the live R2 bucket)
+   rendered the attachment correctly on both sender and receiver — no "Unsupported message", no
+   allowlist mismatch, `media_object_purged_total` fired on ack exactly as designed. No app-logic
+   change was needed for the reported symptom itself.
+
+   Getting to that fresh restart surfaced a real, separate bug along the way, now fixed: Turborepo
+   2.x defaults to strict env mode, and `turbo.json`'s `dev` task never declared an env
+   passthrough, so `pnpm dev` from any clean shell silently dropped every custom env var
+   (`DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `RESEND_API_KEY`, `GITHUB_CLIENT_ID/SECRET`, all
+   four `R2_*` vars) and `apps/server` crashed at startup with a wall of zod "Required" errors —
+   easy to misread as a broken `.env` rather than a turbo config gap. Fixed by setting
+   `"envMode": "loose"` in `turbo.json`. That in turn exposed a second, smaller issue: with the
+   full shell env now reaching every task, `apps/web`'s `next dev` started picking up the
+   server's own `PORT=4000` from `.env` and binding there instead of 3000, colliding with the
+   actual server. Fixed by pinning `apps/web/package.json`'s `dev`/`start` scripts to `-p 3000`
+   explicitly, rather than renaming the server's `PORT` var — `apps/server` deploys to Render,
+   which sets `PORT` automatically by platform convention, so that name needs to stay exactly
+   `PORT` for when deployment is actually wired up. Net effect: a clean `pnpm dev` from a cold
+   shell now works end-to-end, which it did not reliably do before this fix.
+
+Items 2–6 are now sequenced as **Phase 6, parts 3–6** — full rationale and ordering in
+`docs/ROADMAP.md`'s "Phase 6, parts 3–6" section, not repeated here. Short form:
+
+2. **Part 3 — DONE (2026-08-27).** `attachmentPayload` now flows through `packages/backup`'s
+   `BackupEntry`/`collectBackupPayload`/`applyBackupPayload` (`packages/backup/src/serialize.ts`) —
+   optional on both read and write, since a device may not have the bytes locally (already purged,
+   or never downloaded). `chunker.ts` needed no changes at all: it carries `BackupEntry` opaquely,
+   so device-linking's P2P transfer got this for free the moment `serialize.ts` did. Closes the gap
+   ADR-0009's Consequences section documented; `docs/BACKUP_FORMAT.md` §2 updated with the new field.
+   Unit-tested (encrypted file round-trip in `roundtrip.test.ts`, chunk/reassemble in
+   `chunker.test.ts`) and live-verified: real two-device Playwright run — image sent over the live
+   R2 bucket on device A1, backup exported and encrypted, imported on a freshly-logged-in A2 (same
+   account) — rendered correctly, no "Image not available". Device-linking's WebRTC path wasn't
+   separately live-verified this round (same unchanged plaintext model, already covered by the
+   chunker unit test), only the file export/import path.
+3. **Part 5 — read receipts, delivery/read ticks, last seen.** New relay event(s) + a presence data
+   model on top of the Redis TTL rows `docs/RETENTION.md` §2 already reserves. User asked for a
+   non-blue "read" tick color specifically, to avoid the exact WhatsApp look. Likely needs its own
+   ADR.
+4. **Part 4 — DONE (2026-08-27).** Profile pictures. `users.avatarUrl` was already partially in use
+   (GitHub OAuth signups get GitHub's own public CDN URL stored verbatim) — self-uploaded avatars
+   needed a design decision the original one-line plan undersold, written up as
+   [ADR-0010](docs/ADR/0010-profile-pictures.md): no new R2 bucket/public-access toggle (would leak
+   `attachments/` message-media objects too, since R2's public-access setting is bucket-wide, not
+   per-prefix — see ADR-0010's Decision), so self-uploaded avatars stay in the existing private
+   bucket under `avatars/{userId}/{uuid}`, and `users.avatarUrl` now holds *either* a plain external
+   URL (OAuth, used as-is) *or* a bare R2 key (self-uploaded, resolved to a fresh 24h-TTL presigned
+   GET by `modules/users/avatar.service.ts`'s `resolveAvatarUrl` — long-lived unlike message media's
+   300s, since an avatar is resolved once per API response and then displayed un-refreshed for a
+   whole session). New endpoint `POST /me/avatar/upload-url` (mirrors `/media/upload-url`, 5MB cap);
+   `PATCH /me` gained an optional `avatarUrl` (an r2Key or `null` to remove — never a client-supplied
+   URL, closing off a way to bypass the upload flow). `toPublicUser` and the conversations
+   members-list resolver now both resolve avatars before sending a response. Replacing an avatar
+   best-effort deletes the old R2 object (unlike ADR-0009's accepted orphan risk for message media —
+   a user changing their photo repeatedly is common, not a rare race, so it's worth the extra delete
+   call). Client: a shared `Avatar` component (real photo or an initial-letter fallback circle, never
+   a broken-image icon) now appears in Settings > Edit profile (upload/remove), Inbox rows, Thread
+   headers, conversation settings' member list, and New Chat's participant list. Live-verified with
+   Playwright: uploaded a real photo on one account, confirmed it renders immediately in that
+   account's own Settings page, and confirmed a second account's Inbox row and Thread header both
+   show that photo (the "other member's avatar" case, `conversationAvatarUrl`) — not just the
+   fallback initials it showed before the upload.
+5. **Part 6 — UI polish pass**, last on purpose (styles the new tick/avatar/last-seen surface once).
+   Direction from the user (2026-08-27): more visual richness + better information hierarchy,
+   blending Signal's restrained/high-contrast bubble language with some of Telegram's denser, more
+   colorful chrome.

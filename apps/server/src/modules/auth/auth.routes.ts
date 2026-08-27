@@ -16,7 +16,7 @@ export default async function authRoutes(fastify: FastifyInstance): Promise<void
       const { user, device, ...tokens } = await registerUser(fastify.db, input, fastify.env);
       return reply
         .code(201)
-        .send({ user: toPublicUser(user), device: toPublicDevice(device), ...tokens });
+        .send({ user: await toPublicUser(user, fastify.r2), device: toPublicDevice(device), ...tokens });
     },
   );
 
@@ -26,7 +26,7 @@ export default async function authRoutes(fastify: FastifyInstance): Promise<void
     async (request, reply) => {
       const input = parseBody(loginSchema, request.body);
       const { user, device, ...tokens } = await loginUser(fastify.db, input, fastify.env);
-      return reply.send({ user: toPublicUser(user), device: toPublicDevice(device), ...tokens });
+      return reply.send({ user: await toPublicUser(user, fastify.r2), device: toPublicDevice(device), ...tokens });
     },
   );
 

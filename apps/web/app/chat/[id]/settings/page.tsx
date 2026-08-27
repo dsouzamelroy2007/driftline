@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { Avatar } from "../../../../components/avatar";
 import { RequireAuth } from "../../../../components/auth-gate";
 import { listConversations } from "../../../../lib/api-client";
 import { useAuth } from "../../../../lib/auth-context";
@@ -49,7 +50,11 @@ function ConversationSettingsContent() {
         <h2 className="mb-2 text-sm font-medium text-text-muted">Members</h2>
         <ul className="flex flex-col gap-1">
           {conversation.members.map((member) => (
-            <li key={member.userId} className="rounded-control bg-bg-surface-raised px-3 py-2 text-sm text-text-primary">
+            <li
+              key={member.userId}
+              className="flex items-center gap-3 rounded-control bg-bg-surface-raised px-3 py-2 text-sm text-text-primary"
+            >
+              <Avatar name={member.displayName} avatarUrl={member.avatarUrl} size="sm" />
               {member.displayName} {member.userId === user?.id && <span className="text-text-muted">(you)</span>}
             </li>
           ))}

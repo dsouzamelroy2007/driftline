@@ -37,7 +37,7 @@ explicitly MVP+.
 | 3 | Relay core: store-and-forward, fan-out & retention | 3 | 2 |
 | 4 | Client sync engine & local-first store | 2–3 | 3 |
 | 5 | Web client (portfolio-grade UI) | 3–4 | 4 |
-| 6 | Backup, device linking, media & client-side search | 3 | 4, partially 5 |
+| 6 | Backup, device linking, media & client-side search (+ parts 3–6, see below) | 3 + 4 follow-up | 4, partially 5 |
 | 7 | Deployment & live demo | 1–2 | 5, 6 |
 | 8 | Hardening, observability & retention compliance | 2 | 7 |
 | 9 | GitHub integration & CI/CD | 1–2 | 8 (some of this can start as early as Phase 1 in practice — branch protection, basic `ci.yml` — but the full workflow set including `retention.yml` needs Phase 3+8 done to have something real to check) |
@@ -45,6 +45,32 @@ explicitly MVP+.
 | 11 | Push, deep links & native integrations | 2 | 10 |
 | 12 | Store release (Android & iOS) | 1–2 sessions + external wait time (review queues, my own account setup) | 11 |
 | 13 | Portfolio polish & case study | 1 | everything above |
+
+### Phase 6, parts 3–6 (added 2026-08-27, from a live manual test pass of parts 1–2b)
+
+Parts 1–2b shipped the originally-scoped Phase 6 work (backup/device-linking, search, media) and were
+marked complete. A live manual test pass of that full feature set surfaced four more items that are
+extensions of exactly that same scope — not new MVP+ features, and (for receipts/presence) actually
+catching up on functionality the MVP cut (§ above) already called for — so they stay under Phase 6
+rather than colliding with Phase 7's already-planned "Deployment & live demo" scope:
+
+- **Part 3 — attachments through backup/device-linking.** `packages/backup` (ADR-0007) and
+  device-linking (ADR-0008) don't carry `attachmentPayload` through transfer yet, only the text
+  descriptor — a documented gap in ADR-0009's Consequences. Smallest, most self-contained of the
+  four; one package, no new protocol surface.
+- **Part 4 — profile pictures — DONE (2026-08-27).** `users.avatarUrl` has existed unused since
+  Phase 2. Turned out to need its own design decision, not a direct reuse of ADR-0009's pattern —
+  see [ADR-0010](ADR/0010-profile-pictures.md) for why (short version: no new public R2 bucket, a
+  dual-shape `avatarUrl` resolved server-side, a long-lived presigned GET instead of message-media's
+  short one).
+- **Part 5 — presence: read receipts, delivery/read ticks, last seen.** The biggest of the four —
+  new relay event(s) and a presence data model on top of the Redis TTL rows `docs/RETENTION.md` §2
+  already reserves for this. Likely needs its own ADR. Parts 3–4 come first so this — the part most
+  likely to need a design iteration — isn't blocked behind smaller, unrelated work.
+- **Part 6 — UI polish pass.** Deliberately last: read ticks, avatars, and last-seen all add UI
+  surface that a polish pass should style once rather than redo. Direction from the user (2026-08-27):
+  more visual richness and better information hierarchy, blending Signal's restrained/high-contrast
+  bubble language with some of Telegram's denser, more colorful chrome.
 
 Phases 5 and 6 both depend on Phase 4 and can interleave somewhat (backup/search UI in Phase 6 needs
 some of Phase 5's shell), but Phase 3 must be fully done and correct before either starts — the relay

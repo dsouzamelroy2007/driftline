@@ -33,6 +33,6 @@ export default async function magicLinkRoutes(fastify: FastifyInstance): Promise
       token,
       fastify.env,
     );
-    return reply.send({ user: toPublicUser(user), device: toPublicDevice(device), ...tokens });
+    return reply.send({ user: await toPublicUser(user, fastify.r2), device: toPublicDevice(device), ...tokens });
   });
 }

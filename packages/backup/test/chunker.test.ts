@@ -70,4 +70,33 @@ describe("chunkBackupPayload / createChunkReassembler", () => {
 
     expect(reassembler.isDone()).toBe(false);
   });
+
+  it("carries a media entry's attachmentPayload through unchanged", () => {
+    const mediaPayload: BackupPayload = {
+      conversations: [
+        {
+          conversationId: "conv-1",
+          cursorSeq: 1,
+          entries: [
+            {
+              envelopeId: "e1",
+              senderId: "u1",
+              senderDeviceId: "d1",
+              seq: 1,
+              contentType: "image/png",
+              payload: "eyJyMktleSI6ImsifQ==",
+              attachmentPayload: "aW1hZ2UtYnl0ZXM=",
+              createdAt: 1,
+            },
+          ],
+        },
+      ],
+    };
+
+    const reassembler = createChunkReassembler();
+    for (const message of chunkBackupPayload(mediaPayload)) reassembler.push(message);
+
+    const rebuilt = reassembler.toBackupPayload();
+    expect(rebuilt.conversations[0]!.entries[0]!.attachmentPayload).toBe("aW1hZ2UtYnl0ZXM=");
+  });
 });

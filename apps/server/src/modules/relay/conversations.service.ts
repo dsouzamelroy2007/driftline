@@ -9,6 +9,8 @@ import {
 import { and, eq, inArray } from "drizzle-orm";
 
 import { HttpError } from "../../lib/errors.js";
+import type { R2Context } from "../../plugins/app-context.js";
+import { resolveAvatarUrl } from "../users/avatar.service.js";
 
 export interface CreateConversationInput {
   type: "direct" | "group";
@@ -19,6 +21,7 @@ export interface CreateConversationInput {
 export interface ConversationMemberSummary {
   userId: string;
   displayName: string;
+  avatarUrl: string | null;
 }
 
 // Conversations carry no name column (a group's display name is derived client-side from this
@@ -28,7 +31,7 @@ export interface ConversationWithMembers extends Conversation {
   members: ConversationMemberSummary[];
 }
 
-async function attachMembers(db: Db, conversationList: Conversation[]): Promise<ConversationWithMembers[]> {
+async function attachMembers(db: Db, r2: R2Context, conversationList: Conversation[]): Promise<ConversationWithMembers[]> {
   if (conversationList.length === 0) return [];
 
   const conversationIds = conversationList.map((conversation) => conversation.id);
@@ -37,6 +40,7 @@ async function attachMembers(db: Db, conversationList: Conversation[]): Promise<
       conversationId: conversationMembers.conversationId,
       userId: users.id,
       displayName: users.displayName,
+      avatarUrl: users.avatarUrl,
     })
     .from(conversationMembers)
     .innerJoin(users, eq(conversationMembers.userId, users.id))
@@ -45,7 +49,7 @@ async function attachMembers(db: Db, conversationList: Conversation[]): Promise<
   const membersByConversation = new Map<string, ConversationMemberSummary[]>();
   for (const row of rows) {
     const list = membersByConversation.get(row.conversationId) ?? [];
-    list.push({ userId: row.userId, displayName: row.displayName });
+    list.push({ userId: row.userId, displayName: row.displayName, avatarUrl: await resolveAvatarUrl(r2, row.avatarUrl) });
     membersByConversation.set(row.conversationId, list);
   }
 
@@ -55,7 +59,7 @@ async function attachMembers(db: Db, conversationList: Conversation[]): Promise<
   }));
 }
 
-export async function createConversation(db: Db, input: CreateConversationInput): Promise<ConversationWithMembers> {
+export async function createConversation(db: Db, r2: R2Context, input: CreateConversationInput): Promise<ConversationWithMembers> {
   const memberIds = Array.from(new Set([input.creatorId, ...input.participantUserIds]));
 
   if (input.type === "direct" && memberIds.length !== 2) {
@@ -87,17 +91,17 @@ export async function createConversation(db: Db, input: CreateConversationInput)
     return row;
   });
 
-  const [withMembers] = await attachMembers(db, [created]);
+  const [withMembers] = await attachMembers(db, r2, [created]);
   return withMembers!;
 }
 
-export async function listConversationsForUser(db: Db, userId: string): Promise<ConversationWithMembers[]> {
+export async function listConversationsForUser(db: Db, r2: R2Context, userId: string): Promise<ConversationWithMembers[]> {
   const rows = await db
     .select({ conversation: conversations })
     .from(conversationMembers)
     .innerJoin(conversations, eq(conversationMembers.conversationId, conversations.id))
     .where(eq(conversationMembers.userId, userId));
-  return attachMembers(db, rows.map((row) => row.conversation));
+  return attachMembers(db, r2, rows.map((row) => row.conversation));
 }
 
 export async function isConversationMember(db: Db, conversationId: string, userId: string): Promise<boolean> {

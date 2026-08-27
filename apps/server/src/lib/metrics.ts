@@ -34,3 +34,21 @@ export function logMediaCleanupFailed(r2Key: string, error: unknown): void {
     }),
   );
 }
+
+// docs/ADR/0010-profile-pictures.md: a separate metric from media_object_purged_total on purpose —
+// this is routine cleanup of a replaced profile photo, not part of the retention guarantee those
+// metrics report on.
+export function logAvatarObjectReplaced(r2Key: string): void {
+  console.log(JSON.stringify({ metric: "avatar_object_replaced_total", r2Key, ts: new Date().toISOString() }));
+}
+
+export function logAvatarCleanupFailed(r2Key: string, error: unknown): void {
+  console.error(
+    JSON.stringify({
+      metric: "avatar_cleanup_failed_total",
+      r2Key,
+      error: error instanceof Error ? error.message : String(error),
+      ts: new Date().toISOString(),
+    }),
+  );
+}

@@ -36,10 +36,17 @@ export async function createUploadUrl(
 
 // Minted fresh at delivery time (modules/relay/socket.ts's toWireEnvelope) — the act of delivering
 // this envelope to this device is the authorization check, so there's no separate download-auth
-// endpoint that would need its own membership lookup.
-export async function createDownloadUrl(client: S3Client, bucket: string, key: string): Promise<string> {
+// endpoint that would need its own membership lookup. `expiresInSeconds` defaults to the short
+// message-media TTL above; callers with a longer-lived use case (e.g. avatars, resolved once and
+// displayed for a whole session — see modules/users/avatar.service.ts) pass their own.
+export async function createDownloadUrl(
+  client: S3Client,
+  bucket: string,
+  key: string,
+  expiresInSeconds: number = DOWNLOAD_URL_TTL_SECONDS,
+): Promise<string> {
   const command = new GetObjectCommand({ Bucket: bucket, Key: key });
-  return getSignedUrl(client, command, { expiresIn: DOWNLOAD_URL_TTL_SECONDS });
+  return getSignedUrl(client, command, { expiresIn: expiresInSeconds });
 }
 
 // Called only after the Postgres purge transaction has already committed (modules/media/

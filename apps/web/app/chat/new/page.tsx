@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { Avatar } from "../../../components/avatar";
 import { RequireAuth } from "../../../components/auth-gate";
 import { ApiError, createConversation, lookupUserByEmail } from "../../../lib/api-client";
 import { useAuth } from "../../../lib/auth-context";
@@ -88,7 +89,8 @@ function NewChatContent() {
         <ul className="flex flex-col gap-2">
           {participants.map((participant) => (
             <li key={participant.id} className="flex items-center justify-between rounded-control bg-bg-surface-raised px-3 py-2 text-sm">
-              <span>
+              <span className="flex items-center gap-2">
+                <Avatar name={participant.displayName} avatarUrl={participant.avatarUrl} size="sm" />
                 {participant.displayName} <span className="text-text-muted">({participant.email})</span>
               </span>
               <button

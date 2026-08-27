@@ -2,6 +2,9 @@ import { z } from "zod";
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  // Kept as the bare PORT (not e.g. SERVER_PORT) since Render sets this automatically in
+  // production to tell the app which port to bind — apps/web/package.json pins its own dev
+  // port explicitly instead, so the two don't collide locally under turbo.json's loose env mode.
   PORT: z.coerce.number().int().positive().default(4000),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   REDIS_URL: z.string().min(1, "REDIS_URL is required"),

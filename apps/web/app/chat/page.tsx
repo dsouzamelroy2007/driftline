@@ -5,10 +5,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { Avatar } from "../../components/avatar";
 import { RequireAuth } from "../../components/auth-gate";
 import { listConversations } from "../../lib/api-client";
 import { useAuth } from "../../lib/auth-context";
-import { conversationDisplayName } from "../../lib/conversation-name";
+import { conversationAvatarUrl, conversationDisplayName } from "../../lib/conversation-name";
 import { useLocalStore } from "../../lib/local-store-context";
 import { hasSeenOnboarding } from "../../lib/onboarding";
 import { getLastReadId } from "../../lib/read-state";
@@ -143,11 +144,17 @@ function InboxContent() {
                   href={`/chat/${conversation.id}`}
                   className="flex items-center justify-between gap-3 px-4 py-3 transition hover:bg-bg-surface-raised motion-reduce:transition-none"
                 >
-                  <div className="min-w-0">
-                    <p className="truncate font-medium text-text-primary">
-                      {user ? conversationDisplayName(conversation, user.id) : "…"}
-                    </p>
-                    <p className="truncate text-sm text-text-muted">{preview?.text ?? "…"}</p>
+                  <div className="flex min-w-0 items-center gap-3">
+                    <Avatar
+                      name={user ? conversationDisplayName(conversation, user.id) : "…"}
+                      avatarUrl={user ? conversationAvatarUrl(conversation, user.id) : null}
+                    />
+                    <div className="min-w-0">
+                      <p className="truncate font-medium text-text-primary">
+                        {user ? conversationDisplayName(conversation, user.id) : "…"}
+                      </p>
+                      <p className="truncate text-sm text-text-muted">{preview?.text ?? "…"}</p>
+                    </div>
                   </div>
                   {preview && preview.unreadCount > 0 && (
                     <span className="shrink-0 rounded-full bg-accent-primary px-2 py-0.5 text-xs font-medium text-white">

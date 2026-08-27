@@ -223,10 +223,9 @@ export interface ImportEntryInput {
   seq: number;
   contentType: string;
   payload: string;
-  // Not yet populated by packages/backup's export/import or device-linking transfer (Phase 6 parts
-  // 1/2b didn't wire attachment bytes through either flow — a documented limitation, see
-  // docs/ADR/0009-media-attachments.md) — accepted here regardless so this function is ready for
-  // whenever that's added, without another schema/signature change.
+  // Populated by packages/backup's export/import and device-linking transfer since Phase 6 part 3
+  // (docs/ADR/0009-media-attachments.md) when the source device still has the bytes locally; absent
+  // otherwise (already purged there, or a text message).
   attachmentPayload?: string;
   createdAt: Date;
 }

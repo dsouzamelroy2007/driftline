@@ -12,10 +12,11 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { Avatar } from "../../../components/avatar";
 import { RequireAuth } from "../../../components/auth-gate";
 import { listConversations } from "../../../lib/api-client";
 import { useAuth } from "../../../lib/auth-context";
-import { conversationDisplayName } from "../../../lib/conversation-name";
+import { conversationAvatarUrl, conversationDisplayName } from "../../../lib/conversation-name";
 import { uploadAttachment, validateAttachmentFile } from "../../../lib/attachment-upload";
 import { useLocalStore } from "../../../lib/local-store-context";
 import { setLastReadId } from "../../../lib/read-state";
@@ -257,6 +258,9 @@ function ThreadContent() {
         <Link href="/chat" className={linkClass}>
           ←
         </Link>
+        {conversation && user && (
+          <Avatar name={conversationDisplayName(conversation, user.id)} avatarUrl={conversationAvatarUrl(conversation, user.id)} size="sm" />
+        )}
         <h1 className="flex-1 truncate font-medium text-text-primary">
           {conversation && user ? conversationDisplayName(conversation, user.id) : "…"}
         </h1>

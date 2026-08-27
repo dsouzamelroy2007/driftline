@@ -84,14 +84,17 @@ the base64 and displays it via `URL.createObjectURL`, never a giant inline data 
   concern for a future moderation pass, not a retention-model concern.
 - **No thumbnails, no image dimensions in the descriptor.** Full image only, browser-constrained via
   CSS max-width/height. Real portfolio polish, not attempted this pass.
-- **Backup export/import and device-linking transfer don't carry attachment bytes yet.** `ADR-0007`'s
-  backup format and `ADR-0008`'s P2P transfer both predate this ADR and still only move
-  `timeline_entries.payload` (the descriptor), not `attachment_payload`. A media message survives a
-  backup restore or device link as a broken-image placeholder (`MessageBubble` handles a missing
-  `attachmentPayload` gracefully — "Image not available" — rather than crashing), not the actual
-  image. `packages/local-store`'s `ImportEntryInput` already accepts an optional `attachmentPayload`
-  so this is a future wiring change in `packages/backup`, not another schema change, whenever it's
-  worth doing.
+- **Backup export/import and device-linking transfer now carry attachment bytes too (Phase 6 part
+  3).** Originally documented here as a gap — `ADR-0007`'s backup format and `ADR-0008`'s P2P
+  transfer both predate this ADR and only moved `timeline_entries.payload` (the descriptor) — since
+  closed by adding an optional `attachmentPayload` to `packages/backup`'s `BackupEntry`
+  (`docs/BACKUP_FORMAT.md` §2), threaded through both `collectBackupPayload`/`applyBackupPayload`
+  and the P2P chunker unchanged (it's carried on the same `BackupEntry` object, no chunking-shape
+  change needed). Still not carried: a device that no longer has the bytes locally (source device
+  already had its own copy purged, or the message was received before this device linked) exports
+  the message without them — `MessageBubble`'s existing "Image not available" fallback covers that
+  case, which was always possible even independent of backup/linking (any purge race on the sending
+  device).
 - Retention accounting (`GET /me/storage`) already counts distinct envelopes, not bytes-by-type, so
   media envelopes are already reflected in the existing "you have N messages held on our servers"
   widget with no change needed there.

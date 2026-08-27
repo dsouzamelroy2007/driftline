@@ -21,6 +21,10 @@ export interface BackupEntry {
   seq: number;
   contentType: string;
   payload: string;
+  /** A media message's locally-cached attachment bytes (docs/ADR/0009-media-attachments.md) — only
+   * present when this device downloaded/kept them; not every device that has the message will have
+   * them past retention purge, so this stays optional on both write and read. */
+  attachmentPayload?: string;
   createdAt: number;
 }
 
@@ -57,6 +61,7 @@ export async function collectBackupPayload(db: LocalStoreDb): Promise<BackupPayl
         seq: entry.seq!,
         contentType: entry.contentType!,
         payload: entry.payload!,
+        attachmentPayload: entry.attachmentPayload ?? undefined,
         createdAt: entry.createdAt.getTime(),
       })),
     });
@@ -81,6 +86,7 @@ export async function applyBackupPayload(db: LocalStoreDb, payload: BackupPayloa
         seq: entry.seq,
         contentType: entry.contentType,
         payload: entry.payload,
+        attachmentPayload: entry.attachmentPayload,
         createdAt: new Date(entry.createdAt),
       })),
     })),

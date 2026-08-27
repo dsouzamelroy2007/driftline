@@ -13,3 +13,12 @@ export function conversationDisplayName(conversation: Conversation, selfUserId: 
   if (others.length === 0) return "Just you";
   return others.map((member) => member.displayName).join(", ");
 }
+
+// Only meaningful for a direct chat — the other person's photo. A group has no single photo to
+// show (no group-icon feature yet), so the Avatar component's initial-letter fallback from
+// conversationDisplayName's joined-names string covers that case well enough for now.
+export function conversationAvatarUrl(conversation: Conversation, selfUserId: string): string | null {
+  if (conversation.type !== "direct") return null;
+  const other = conversation.members.find((member) => member.userId !== selfUserId);
+  return other?.avatarUrl ?? null;
+}

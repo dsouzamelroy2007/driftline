@@ -1,5 +1,14 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  // Turborepo 2.x defaults to strict env mode, which only passes a task's declared `env`
+  // vars through — everything else in the parent shell is stripped. Nothing here runs in a
+  // sandboxed/hermetic CI build (CI sets DATABASE_URL directly in the job env for the `test`
+  // task's own declared var), so there's no isolation benefit to strict mode; there is a real
+  // cost, since it silently zeroes out DATABASE_URL/REDIS_URL/JWT_SECRET/RESEND_API_KEY/
+  // GITHUB_CLIENT_ID/SECRET/R2_* for `pnpm dev` on any machine that hasn't separately
+  // configured turbo's env passthrough, crashing apps/server at startup with no clue that
+  // turbo (not a missing .env) is the cause.
+  "envMode": "loose",
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

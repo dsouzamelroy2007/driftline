@@ -28,6 +28,7 @@ export interface Device {
 export interface ConversationMemberSummary {
   userId: string;
   displayName: string;
+  avatarUrl: string | null;
 }
 
 export type ConversationType = "direct" | "group";
