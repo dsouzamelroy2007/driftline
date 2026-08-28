@@ -33,7 +33,7 @@ jobs:
     env:
       DATABASE_URL: postgres://driftline:driftline@localhost:5432/driftline_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v4
 

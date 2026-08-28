@@ -28,7 +28,7 @@ jobs:
       # Phase 3 exit gate — run against this real Postgres, not a mock (docs/RETENTION.md).
       DATABASE_URL: postgres://driftline:driftline@localhost:5432/driftline_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v4
 
