@@ -51,13 +51,18 @@ docs/RETENTION.md                   — the retention model contract (read befor
 docs/REALTIME_PROTOCOL.md           — Socket.IO contract: handshake auth, every event, gap-notice signaling
 docs/UI_DIRECTION.md                — IA, screens, nav, tokens, motion, retention-specific UX
 docs/ROADMAP.md                     — phase sequence, MVP cut, open questions
+docs/BACKUP_FORMAT.md               — the backup file format spec (packages/backup)
+docs/SECURITY.md                    — auth/rate-limiting/CORS/crash-safety posture (Phase 8)
+docs/RUNBOOK.md                     — operational reference: real incidents and their fixes (Phase 8)
 docs/ADR/                           — 0001 stack, 0002 retention/storage, 0003 multi-device sync,
                                        0004 auth token model, 0005 Postgres driver,
-                                       0006 local-store engine
+                                       0006 local-store engine, 0007 backup format, 0008 device
+                                       linking, 0009 media attachments, 0010 profile pictures,
+                                       0011 presence and receipts
 ```
 (`apps/`, `packages/` now exist as of Phase 1 — see below. `infra/` and the remaining `docs/*.md`
 listed in the master plan's repo layout — `ARCHITECTURE.md`, `SYNC_MODEL.md`, `SCALE.md`,
-`SECURITY.md`, `RUNBOOK.md`, `CASE_STUDY.md`, `BACKUP_FORMAT.md` — land in later phases.)
+`CASE_STUDY.md` — land in later phases.)
 
 ## Repo layout (as of Phase 6, part 2b)
 
@@ -567,3 +572,103 @@ same blob object URL the `<img>` already holds — no new fetch, no new local-st
 every bubble that can show an image (sender's own, incoming, and the optimistic outbox bubble) since
 they all go through the same `AttachmentImage` component. Live-verified with Playwright: a real file
 saved by the receiver is byte-identical to the original upload.
+
+Re-verified in a follow-up session (2026-08-28) against a freshly-started `pnpm dev` (never reuse a
+long-running one — this project has hit stale-bundle false alarms from that twice before): a real
+two-account Playwright run (register both, direct chat, upload a real PNG, receiver clicks
+"Download") confirmed the saved file's SHA-256 matches the original upload exactly. **Phase 6, all
+parts, is now fully done and fully verified.**
+
+**Phase 7 (Deployment & live demo): complete.** `apps/server` on Render (free Web Service,
+`https://driftline-schd.onrender.com`), `apps/web` on Vercel
+(`https://driftline-web-gamma.vercel.app`, linked from the README). Both auto-deploy from
+`origin/main`. Per a decision made with the user before provisioning anything: the GitHub OAuth App
+is shared between local dev and production (a second authorized callback URL added, not a second
+app), and Neon/Upstash/Resend/R2 are all the same free-tier instances local dev already used — no
+new infra provisioned, matching this project's $0-budget/single-environment posture. The R2 bucket's
+CORS policy gained the Vercel origin alongside `localhost:3000` (both `PUT` and `GET`, same lesson
+as ADR-0009's original CORS miss).
+
+Two real bugs found and fixed during deployment, neither hypothetical:
+
+1. Render's `WEB_ORIGIN` env var was entered with a trailing slash
+   (`https://driftline-web-gamma.vercel.app/`). `@fastify/cors` treats a string `origin` option as a
+   literal value to echo back, not a pattern to match against the request's `Origin` header — so it
+   returned `204` with that header set regardless of what `Origin` the caller sent, making `curl`
+   checks look fine. A real browser's `Origin` header never has a trailing slash, so the exact-string
+   comparison the browser itself performs against `Access-Control-Allow-Origin` always failed,
+   silently blocking every real cross-origin request. Caught by explicitly comparing the response
+   header byte-for-byte against the expected origin, not just checking for a `204`/200. Fixed by
+   correcting the env var (took two attempts — the first edit didn't trigger a redeploy on Render
+   until a manual deploy was triggered).
+2. The bigger one: live verification against the deployed URLs kept failing in ways that didn't
+   match any app bug — until inspecting the actual served HTML for the `AttachmentImage` component
+   showed the *pre-fix* markup (no wrapping `<div>`, no `<a>Download</a>` at all). `git status`
+   revealed why: local `main` was 4 commits ahead of `origin/main` — including the download-link fix
+   (`9a2e285`) and all of Phase 6 parts 3–6 (presence/receipts, avatars, the UI polish pass) — none
+   of it had ever been pushed. Render and Vercel both deploy from `origin/main`, so both were quietly
+   serving a build from before Phase 6 part 5 the entire time this session started. Fixed by pushing;
+   both platforms auto-redeployed within about a minute.
+
+Live-verified end-to-end against the real deployed URLs post-fix, not just build success: a
+Playwright run registered two real accounts directly against `driftline-web-gamma.vercel.app`,
+started a direct chat, sent a text message over the real production Socket.IO relay, uploaded a real
+PNG through the live R2 bucket, and confirmed the recipient's "Download" link produces a
+byte-for-byte SHA-256 match of the original file — the same bar every prior phase was held to,
+now cleared against production infra instead of local dev.
+
+**Phase 8 (Hardening, observability & retention compliance): parts A and C done; part B (Sentry) on
+hold pending a Sentry account from the user.** Scoped into three parts up front rather than the
+single generic "hardening" line `docs/ROADMAP.md`'s table row implies, since research into what
+actually exists turned up concrete, non-hypothetical gaps rather than a vague to-do:
+
+- **Part A — crash-safety hardening, done.** Two live crash risks, neither ever triggered in
+  practice but both real given this app's actual infra: `packages/db/src/client.ts`'s `pg.Pool` and
+  `apps/server/src/lib/redis.ts`'s `ioredis` client both had zero `.on("error", ...)` listeners —
+  Neon's free-tier auto-suspend and Upstash's idle timeouts both drop connections routinely, and an
+  unhandled `error` event on either client crashes the whole Node process by default. Both now log a
+  structured metric line and let the underlying client's own reconnect logic handle it. Also added:
+  `process.on("uncaughtException"/"unhandledRejection")` guards (log via the same path as the
+  existing error handler, then exit so the platform's restart-on-crash still applies, but the
+  failure is actually visible in the logs first) and a real `/health` endpoint
+  (`apps/server/src/lib/health.ts`) that pings Postgres and Redis with a 2-second timeout each and
+  returns `503` if either is unreachable, instead of the previous unconditional `{status:"ok"}` —
+  Render's own health check couldn't previously tell "up but broken" from healthy. Closed four
+  rate-limiting gaps found during the audit (`/auth/refresh`, `/auth/magic-link/verify`,
+  `DELETE /devices/:id`, `POST /conversations` all had no limit at all, unlike every other
+  auth-adjacent or write endpoint). Full writeup in the new `docs/SECURITY.md`. Full pipeline
+  (lint/typecheck/test/build, 59 tests including four new ones for the health-check logic) green for
+  `@driftline/server` and `@driftline/db` against a real local Postgres.
+- **Part C — retention compliance closeout, done.** `docs/RETENTION.md` §8's open question (device
+  *record* cleanup after long dormancy) was carried since Phase 0 and explicitly gated on the device
+  manager UI existing — Phase 5 shipped that UI. Closed as: device records are retained indefinitely;
+  only revocation (not row deletion) is exposed, since a `Device` row is routing metadata, not
+  content, and revocation already does everything the retention contract actually needs. Formalized
+  as a new point 5 in [ADR-0002](docs/ADR/0002-retention-storage-model.md). Also wrote the two
+  remaining "lands in later phases" docs from this file's own repo-layout note: `docs/SECURITY.md`
+  and `docs/RUNBOOK.md` (the latter grounded in this project's own real incidents — the Phase 7 CORS
+  trailing-slash bug, the unpushed-commits deploy-staleness bug, the recurring stale-`pnpm-dev`
+  false alarm, and the Turborepo strict-env-mode gap — not generic runbook boilerplate).
+- **Part B — Sentry wiring, done.** The user provided a Sentry DSN (free tier). `@sentry/node`
+  installed in `apps/server` only; `SENTRY_DSN` is optional in `env.ts` (local dev runs fine without
+  it) and tags every event with `NODE_ENV`, so one DSN safely covers both dev and prod — filterable
+  by environment in Sentry's dashboard rather than needing two projects. `apps/server/src/lib/
+  sentry.ts` is the actual "PII scrubbing configured from day one" ADR-0001 committed to:
+  `sendDefaultPii: false` (no IP/cookie/body auto-attached) plus a `beforeSend` that strips
+  `authorization`/`cookie` headers from whatever request context does get attached. Wired into all
+  three places an error can surface: the global error handler's 5xx branch, and both
+  `uncaughtException`/`unhandledRejection` guards (which now call `Sentry.flush` before
+  `process.exit`, so a crash's own event isn't dropped mid-flight by the exit itself). This also
+  closes `docs/RETENTION.md` §7's last unchecked checklist item: a new
+  `modules/relay/retention-monitor.ts` checks the oldest still-present envelope's age against
+  `createdAt` every sweep cycle (independent of `expiresAt`, so a bug in that computation can't mask
+  itself) and reports a violation to Sentry at `fatal` level plus a `retention_violation_total`
+  structured log line — Sentry's dashboard is the alerting surface, deliberately not a new
+  Prometheus/Grafana stack for one free-tier instance. Verified two ways: a standalone script
+  (written, run, then deleted — not left in the repo) called `captureException` + `Sentry.flush`
+  against the real DSN and confirmed a successful flush; and `retention-monitor.test.ts`
+  (2 new tests, 61 total now) proves the violation-detection logic itself by forcibly back-dating a
+  real envelope's `createdAt` by 31 days against a real Postgres. Full pipeline
+  (lint/typecheck/test/build) green for `@driftline/server` and `@driftline/db`.
+
+**Phase 8 is now fully done** (all three parts, A/B/C).

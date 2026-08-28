@@ -52,3 +52,32 @@ export function logAvatarCleanupFailed(r2Key: string, error: unknown): void {
     }),
   );
 }
+
+// Phase 8 hardening: ioredis emits 'error' on a dropped/reset connection (Upstash idle timeouts,
+// network blips). ioredis reconnects on its own — this listener exists purely so the emission has
+// at least one handler, since an EventEmitter's unhandled 'error' event throws and crashes the
+// process. Same reasoning as packages/db/src/client.ts's pool.on("error", ...).
+// docs/RETENTION.md §7's last checklist item, made concrete: modules/relay/retention-monitor.ts
+// checks this every sweep cycle. A non-empty log line here (and the matching Sentry report,
+// lib/sentry.ts's captureRetentionViolation) means the sweeper itself is broken, not routine
+// operation — this should never fire in a healthy deployment.
+export function logRetentionViolation(oldestEnvelopeAgeMs: number, retentionWindowDays: number): void {
+  console.error(
+    JSON.stringify({
+      metric: "retention_violation_total",
+      oldestEnvelopeAgeMs,
+      retentionWindowDays,
+      ts: new Date().toISOString(),
+    }),
+  );
+}
+
+export function logRedisError(error: unknown): void {
+  console.error(
+    JSON.stringify({
+      metric: "redis_client_error_total",
+      error: error instanceof Error ? error.message : String(error),
+      ts: new Date().toISOString(),
+    }),
+  );
+}

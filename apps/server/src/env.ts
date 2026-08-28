@@ -24,6 +24,10 @@ const envSchema = z.object({
   R2_ACCESS_KEY_ID: z.string().min(1, "R2_ACCESS_KEY_ID is required"),
   R2_SECRET_ACCESS_KEY: z.string().min(1, "R2_SECRET_ACCESS_KEY is required"),
   R2_BUCKET_NAME: z.string().min(1, "R2_BUCKET_NAME is required"),
+  // Optional on purpose: local dev works fine without it (see docs/SECURITY.md §5). Sentry itself
+  // tags every event with NODE_ENV, so the same DSN is safe to set in both dev and prod — events
+  // are just filterable by environment in Sentry's dashboard rather than needing two projects.
+  SENTRY_DSN: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

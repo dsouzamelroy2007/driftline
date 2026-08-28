@@ -10,6 +10,10 @@ device — the server keeps only who you are, who you talk to, and what's curren
 This repo is a work in progress, built phase by phase as a portfolio project. Status and the current
 phase are tracked in [`CLAUDE.md`](CLAUDE.md).
 
+**Live demo:** [driftline-web-gamma.vercel.app](https://driftline-web-gamma.vercel.app) (web on
+Vercel, relay on Render's free tier — the first request after a period of inactivity may take a
+few seconds to wake the server up).
+
 ## Docs
 
 - [`docs/DESIGN_REVIEW.md`](docs/DESIGN_REVIEW.md) — what we kept, changed, and dropped from the
@@ -21,6 +25,8 @@ phase are tracked in [`CLAUDE.md`](CLAUDE.md).
 - [`docs/UI_DIRECTION.md`](docs/UI_DIRECTION.md) — information architecture, screens, and the UX
   problems this architecture creates that a normal chat app doesn't have.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — phase sequence and MVP scope.
+- [`docs/SECURITY.md`](docs/SECURITY.md) — auth, rate limiting, CORS, and crash-safety posture.
+- [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — operational reference, written from real incidents.
 - [`docs/ADR/`](docs/ADR/) — architecture decision records, including every deliberate divergence
   from the reference design.
 - [`design/reference-system-design.md`](design/reference-system-design.md) — the source system-design

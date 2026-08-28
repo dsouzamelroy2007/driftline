@@ -42,6 +42,18 @@ per-conversation-vs-global retention-window question raised in Phase 0.
 4. **The 30-day window applies uniformly to messages, receipts, reactions, and attachments.** All are
    envelopes; none get bespoke retention logic. This keeps the "no server code reads a message body"
    invariant enforceable by one mechanical check (Phase 1) rather than several.
+5. **Device *records* are retained indefinitely; only revocation is exposed, not row deletion.**
+   (Closes the open question carried since Phase 0, formalized Phase 8, 2026-08-28, once the device
+   manager UI (Phase 5) made the trade-off concrete.) A `Device` row is routing/identity metadata —
+   who a user's devices are and when they were last seen — not content, so R6 permits durable
+   retention of it the same way `User`/`Conversation` rows are durable. Revoking a device
+   (`DELETE /devices/:id`) sets `revokedAt`, nulls its refresh-token hash, and synchronously purges
+   its pending `EnvelopeTarget` rows — the only two things that matter for the retention contract
+   (no future messages route to it, no already-pending ones sit waiting on it forever). The device
+   manager UI built in Phase 5 only ever exposed "Revoke," never "Delete," and this decision ratifies
+   that as intentional rather than a missing feature: a hard-delete endpoint would need to reckon with
+   FK references from historical `envelope_targets` rows and would buy no additional privacy
+   guarantee, since nothing about a revoked device row is itself content.
 
 ## Consequences
 
@@ -60,6 +72,10 @@ per-conversation-vs-global retention-window question raised in Phase 0.
 - Losing a device without a backup is a real, permanent data-loss event for the user. This is treated
   as a UX problem to be honest about (Phase 5/6 backup nagging, gap notices), not an edge case to
   minimize in the docs.
+- A user's device list grows monotonically and never shrinks on its own — an account with years of
+  device churn (old phones, reinstalls) accumulates revoked rows indefinitely. Accepted per point 5
+  above: it's inert metadata, not a retention-contract concern, and the device manager UI already
+  distinguishes active from revoked so it doesn't read as a bug.
 
 ## Alternatives considered and rejected
 

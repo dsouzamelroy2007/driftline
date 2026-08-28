@@ -169,9 +169,14 @@ importing into a non-empty conversation).
       an object whose upload succeeded but whose `message:send` never happened has no envelope to
       ever trigger this — an accepted orphan-object risk, not a scheduled sweep target (see the
       ADR's Consequences).
-- [ ] **Monitoring** (formalized in Phase 8, flagged here because it's a retention invariant): alert
-      if the oldest *pending* envelope's age exceeds `RETENTION_WINDOW_DAYS` — that means the sweeper
-      itself is broken and data is being retained silently past the contract.
+- [x] **Monitoring** (Phase 8, 2026-08-28): every sweep cycle,
+      `modules/relay/retention-monitor.ts`'s `checkRetentionCompliance` checks the oldest envelope
+      still in the table against `createdAt` (independent of `expiresAt`, so a bug in that
+      computation can't mask itself) — if it exceeds `RETENTION_WINDOW_DAYS`, the sweeper itself is
+      broken, and `lib/sentry.ts`'s `captureRetentionViolation` reports it to Sentry (fatal level)
+      alongside a `retention_violation_total` structured log line. Should never fire in a healthy
+      deployment; unit-tested by forcing exactly this condition
+      (`modules/relay/retention-monitor.test.ts`).
 
 ### Verification (Phase 3, 2026-08-25)
 
@@ -197,11 +202,14 @@ zero rows in both `envelopes` and `envelope_targets` — the integration tests e
 functions directly, this pass confirms the same guarantee holds through the actual wire protocol
 (`docs/REALTIME_PROTOCOL.md`).
 
-## 8. Open question carried to Phase 2/8
+## 8. Device-record cleanup — closed (Phase 8, 2026-08-28)
 
-Device *record* cleanup (as opposed to dormancy/exclusion-from-fan-out) is not yet fully specified:
-should a device that has been dormant for a long time (e.g., 1 year) eventually have its record
-purged entirely, or does it stay forever as an inert row tied to the account? Leaning toward "stays,
-user can see and manually delete it in the device manager" since it's routing metadata, not content,
-and R6 permits durable retention of exactly this kind of data — but this gets a final call and a line
-in ADR-0002 once the device manager UI (Phase 5) makes the trade-off concrete.
+Device *record* cleanup (as opposed to dormancy/exclusion-from-fan-out) was an open question carried
+from Phase 0: should a device that has been dormant for a long time (e.g., 1 year) eventually have
+its record purged entirely, or does it stay forever as an inert row tied to the account? **Resolved:
+it stays forever.** Formalized as [ADR-0002](ADR/0002-retention-storage-model.md)'s point 5, once the
+device manager UI (Phase 5) made the trade-off concrete — that UI only ever exposed "Revoke," never
+"Delete," which is what this decision ratifies. A `Device` row is routing/identity metadata, not
+content, so R6 permits durable retention of it; revocation already does everything the retention
+contract actually requires (excludes the device from future fan-out, synchronously purges its
+pending `EnvelopeTarget` rows). No row-deletion endpoint was built, and none is planned.

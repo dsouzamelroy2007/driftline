@@ -25,14 +25,18 @@ export default async function magicLinkRoutes(fastify: FastifyInstance): Promise
     },
   );
 
-  fastify.post("/auth/magic-link/verify", async (request, reply) => {
-    const { token } = parseBody(magicLinkVerifySchema, request.body);
-    const { user, device, ...tokens } = await verifyMagicLink(
-      fastify.db,
-      fastify.redis,
-      token,
-      fastify.env,
-    );
-    return reply.send({ user: await toPublicUser(user, fastify.r2), device: toPublicDevice(device), ...tokens });
-  });
+  fastify.post(
+    "/auth/magic-link/verify",
+    { config: { rateLimit: MAGIC_LINK_RATE_LIMIT } },
+    async (request, reply) => {
+      const { token } = parseBody(magicLinkVerifySchema, request.body);
+      const { user, device, ...tokens } = await verifyMagicLink(
+        fastify.db,
+        fastify.redis,
+        token,
+        fastify.env,
+      );
+      return reply.send({ user: await toPublicUser(user, fastify.r2), device: toPublicDevice(device), ...tokens });
+    },
+  );
 }

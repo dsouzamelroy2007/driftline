@@ -30,11 +30,15 @@ export default async function authRoutes(fastify: FastifyInstance): Promise<void
     },
   );
 
-  fastify.post("/auth/refresh", async (request, reply) => {
-    const { refreshToken } = parseBody(refreshSchema, request.body);
-    const result = await refreshTokens(fastify.db, refreshToken, fastify.env);
-    return reply.send(result);
-  });
+  fastify.post(
+    "/auth/refresh",
+    { config: { rateLimit: AUTH_RATE_LIMIT } },
+    async (request, reply) => {
+      const { refreshToken } = parseBody(refreshSchema, request.body);
+      const result = await refreshTokens(fastify.db, refreshToken, fastify.env);
+      return reply.send(result);
+    },
+  );
 
   fastify.post(
     "/auth/logout",
