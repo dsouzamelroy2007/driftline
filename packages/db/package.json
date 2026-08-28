@@ -20,7 +20,7 @@
   "devDependencies": {
     "@driftline/eslint-config": "workspace:*",
     "@driftline/tsconfig": "workspace:*",
-    "@types/node": "^22.10.7",
+    "@types/node": "^26.3.0",
     "@types/pg": "^8.11.10",
     "drizzle-kit": "^0.30.2",
     "eslint": "^9.19.0",

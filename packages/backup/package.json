@@ -17,7 +17,7 @@
   "devDependencies": {
     "@driftline/eslint-config": "workspace:*",
     "@driftline/tsconfig": "workspace:*",
-    "@types/node": "^22.10.7",
+    "@types/node": "^26.3.0",
     "eslint": "^9.19.0",
     "typescript": "^5.7.3",
     "vitest": "^3.0.4"
