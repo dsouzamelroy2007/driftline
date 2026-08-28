@@ -18,7 +18,7 @@
     "@sentry/node": "^10.72.0",
     "@fastify/cors": "^10.0.2",
     "@fastify/rate-limit": "^10.2.2",
-    "bcryptjs": "^2.4.3",
+    "bcryptjs": "^3.0.3",
     "drizzle-orm": "^0.38.3",
     "fastify": "^5.2.1",
     "fastify-plugin": "^5.0.1",
@@ -31,7 +31,7 @@
   "devDependencies": {
     "@driftline/eslint-config": "workspace:*",
     "@driftline/tsconfig": "workspace:*",
-    "@types/bcryptjs": "^2.4.6",
+    "@types/bcryptjs": "^3.0.0",
     "@types/node": "^22.10.7",
     "eslint": "^9.19.0",
     "tsx": "^4.19.2",
