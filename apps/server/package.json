@@ -32,7 +32,7 @@
     "@driftline/eslint-config": "workspace:*",
     "@driftline/tsconfig": "workspace:*",
     "@types/bcryptjs": "^2.4.6",
-    "@types/node": "^22.10.7",
+    "@types/node": "^26.3.0",
     "eslint": "^9.19.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
