@@ -1,5 +1,8 @@
 # Driftline
 
+[![CI](https://github.com/dsouzamelroy2007/driftline/actions/workflows/ci.yml/badge.svg)](https://github.com/dsouzamelroy2007/driftline/actions/workflows/ci.yml)
+[![Retention](https://github.com/dsouzamelroy2007/driftline/actions/workflows/retention.yml/badge.svg)](https://github.com/dsouzamelroy2007/driftline/actions/workflows/retention.yml)
+
 > Your messages live on your device, not ours.
 
 A local-first, real-time chat app. The server is a transport, not an archive: it never retains a
@@ -64,6 +67,9 @@ DATABASE_URL=postgres://driftline:driftline@localhost:5433/driftline_test \
 ```
 
 CI does the same against a GitHub Actions Postgres service container — see `.github/workflows/ci.yml`.
+The retention purge paths (ack-triggered, expiry sweep, revocation) additionally get their own
+dedicated check, `.github/workflows/retention.yml`, so a break in that specific guarantee shows up
+as its own named status rather than being buried in the general test run.
 
 `apps/server` listens on `:4000` — `/health`, an auth API (password, magic-link, GitHub OAuth),
 device registry, `/discovery`, conversations, and the Socket.IO relay (handshake auth, message

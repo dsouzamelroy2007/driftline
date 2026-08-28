@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # One entry covers the whole pnpm workspace — Dependabot resolves the root lockfile and opens
+  # PRs scoped to whichever package(s) actually need a bump.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      # Routine patch/minor bumps land as one weekly PR instead of a dozen separate ones; a major
+      # bump always gets its own PR since it's the kind of change worth reviewing individually.
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

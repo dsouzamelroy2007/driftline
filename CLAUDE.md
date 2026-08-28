@@ -672,3 +672,55 @@ actually exists turned up concrete, non-hypothetical gaps rather than a vague to
   (lint/typecheck/test/build) green for `@driftline/server` and `@driftline/db`.
 
 **Phase 8 is now fully done** (all three parts, A/B/C).
+
+**Phase 9 (GitHub integration & CI/CD): done.** Scoped per `docs/ROADMAP.md`'s Phase 9 line, with
+one thing checked before implementing rather than assumed: whether "required status checks on
+direct pushes to `main`, without requiring a PR" (the middle ground between this project's no-PR
+working agreement and classic branch-protection-forces-PRs) was actually available. It wasn't —
+`gh api repos/.../branches/main/protection` and the rulesets endpoint both returned `403: "Upgrade
+to GitHub Pro or make this repository public"` — GitHub's protected-branches feature (rulesets
+included) is Pro-only for **private** repos, free only once a repo is public. That made this a
+real three-way decision (skip branch protection / go public / pay for Pro), not a style preference,
+so it went back to the user rather than being decided unilaterally. Resolved: **the repo is now
+public** (`dsouzamelroy2007/driftline`) — the user's own call, made independently before this
+phase's implementation started. Branch protection/rulesets themselves were **not** enabled even
+though they're now free to enable — the no-PR working agreement from Phase 1 stands; going public
+only removed the paywall, it didn't change the decision about whether to gate `main` behind
+required checks, and that wasn't re-opened.
+
+Landed:
+- **`.github/workflows/retention.yml`** — the concrete deliverable `docs/ROADMAP.md`'s Phase 9 row
+  names. A dedicated check, separate from `ci.yml`, that builds only `@driftline/db` (the one
+  dependency `apps/server`'s tests actually need compiled — vitest transpiles `apps/server`'s own
+  TS directly) against the same `postgres:16` service-container pattern `ci.yml` already uses, then
+  runs `vitest run retention` — a filename-pattern filter, verified locally to resolve to exactly
+  `retention.integration.test.ts` (the Phase 3 exit gate: ack/expiry/revocation purge paths) and
+  `retention-monitor.test.ts` (the Phase 8 compliance check), nothing else. The point: a break in
+  the retention contract itself now shows up as its own named, unmissable status check instead of
+  being buried among every other server test in one combined `ci.yml` run. Verified the file-match
+  is correct (collected exactly those two files, both failing only on missing `DATABASE_URL` with
+  no Postgres available locally in this session) — not live-run against a real Postgres end-to-end,
+  since that would mean either standing up local Docker (unavailable in this session) or pointing
+  at the real dev Neon DB, which the existing README explicitly steers away from for this exact
+  suite (it seeds real rows and would pollute shared dev data). The workflow mirrors `ci.yml`'s
+  already-proven Postgres service-container config exactly, so this is considered adequately
+  verified pending its first real run on `main`.
+- **`.github/dependabot.yml`** — weekly updates for the pnpm workspace (root `npm` ecosystem, one
+  entry covers every package) and GitHub Actions versions, with minor/patch npm bumps grouped into
+  one weekly PR so routine dependency churn doesn't spam a dozen individual PRs; a major bump still
+  gets its own. This is the one deliberate, acknowledged exception to the no-PR agreement — the
+  user opted in explicitly, on the reasoning that automated dependency PRs (optional to merge,
+  dismissable, not human review overhead) are a different kind of thing than the review-overhead
+  problem the no-PR agreement was set up to avoid.
+- **CI/Retention badges** added to `README.md`, plus a short note on what `retention.yml` covers
+  and why it's separate from `ci.yml`.
+- **Repo made public**, with a description and topic tags set
+  (`chat-app`/`real-time`/`local-first`/`socket-io`/`nextjs`/`fastify`/`typescript`/`postgresql`/
+  `drizzle-orm`/`webrtc`/`turborepo`/`monorepo`) — previously blank on both.
+
+Not built, deliberately: branch protection / rulesets themselves (see above — available now that
+the repo is public, but the no-PR working agreement wasn't reopened, so nothing gates `main` beyond
+CI reporting pass/fail); CODEOWNERS and PR/issue templates (no real audience for them on a solo
+repo without a PR-based workflow); CodeQL/code scanning (free for public repos, but a genuinely new
+scope decision — not implied by "GitHub integration & CI/CD" the way the retention job and
+Dependabot were — left for a deliberate follow-up if wanted rather than bundled in here).
