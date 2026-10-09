@@ -14,17 +14,17 @@
     "db:migrate": "tsx scripts/migrate.ts"
   },
   "dependencies": {
-    "drizzle-orm": "^0.38.3",
-    "pg": "^8.13.1"
+    "drizzle-orm": "^0.45.3",
+    "pg": "^8.23.1"
   },
   "devDependencies": {
     "@driftline/eslint-config": "workspace:*",
     "@driftline/tsconfig": "workspace:*",
     "@types/node": "^22.10.7",
     "@types/pg": "^8.11.10",
-    "drizzle-kit": "^0.30.2",
+    "drizzle-kit": "^0.31.11",
     "eslint": "^9.19.0",
-    "tsx": "^4.19.2",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.3"
   }
 }
